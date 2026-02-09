@@ -1,5 +1,5 @@
-import sys, numpy as np, sounddevice as sd, queue, time, math, random, json, os, platform
-from PySide6.QtCore import Qt, QTimer, QPointF, QRect, QEvent, QObject, QSettings
+import sys, numpy as np, sounddevice as sd, queue, time, math, random, json, os, platform, signal
+from PySide6.QtCore import Qt, QTimer, QPointF, QRect, QEvent, QObject
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QGridLayout, QLabel, QComboBox, QPushButton, QSpinBox, 
                              QSlider, QFrame, QCheckBox, QTextEdit, QDialog, QTableWidget, 
@@ -10,8 +10,9 @@ from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor
 #  Constants & Config
 # ==========================================
 APP_NAME = "InnerPulse"
-APP_VERSION = "v1.6.0"
-SETTING_KEY = "setlist_v2"
+APP_VERSION = "v1.7.0"
+JSON_FILENAME = "setlist.json"
+CONFIG_FILENAME = "config.json" # デバイス設定用ファイル
 DEFAULT_SONG = {"name": "Default", "bpm": 120, "bpb": 4}
 
 MAIN_STYLE = """
@@ -84,9 +85,13 @@ class AudioEngine:
             self.sr = int(dev_info.get('default_samplerate', 48000))
             self.current_device_name = dev_info['name']
             self.waves = {"acc": self._make_wave("bell", 2000), "4th": self._make_wave("click", 800), "8th": self._make_wave("hihat"), "16th": self._make_wave("shaker"), "trip": self._make_wave("wood")}
-            self.stream = sd.OutputStream(device=self.device_index, channels=int(dev_info['max_output_channels']), callback=self._cb, latency='low', blocksize=self.buffer_size, samplerate=self.sr)
+            n_channels = min(2, int(dev_info['max_output_channels'])) # 2ch制限
+            self.stream = sd.OutputStream(
+                device=self.device_index, channels=n_channels, callback=self._cb, latency='low', 
+                blocksize=self.buffer_size, samplerate=self.sr
+            )
             self.stream.start(); self.state["total_samples"] = 0
-            return f"{dev_info['name']} ({self.sr}Hz)"
+            return f"{dev_info['name']} ({self.sr}Hz / {n_channels}ch)"
         except Exception as e: return f"Error: {str(e)[:15]}"
 
     def request_start(self):
@@ -180,9 +185,11 @@ class SetlistEditor(QDialog):
     def del_row(self):
         idx = self.table.currentRow(); 
         if idx > 0: self.table.removeRow(idx)
-    def load_and_close(self): self.jump_to_index = self.table.currentRow(); self._sync_setlist(); self.accept()
-    def accept(self): self._sync_setlist(); super().accept()
-    def _sync_setlist(self):
+    def load_and_close(self): self.jump_to_index = self.table.currentRow(); self.accept()
+    def accept(self):
+        self._sync_setlist_to_memory()
+        super().accept()
+    def _sync_setlist_to_memory(self):
         new_list = []
         for i in range(self.table.rowCount()):
             try: new_list.append({"name": self.table.item(i, 0).text(), "bpm": int(self.table.item(i, 1).text()), "bpb": int(self.table.item(i, 2).text())})
@@ -227,36 +234,60 @@ class InnerPulseQt(QMainWindow):
     def __init__(self):
         super().__init__(); self.setWindowTitle(f"{APP_NAME} {APP_VERSION}"); self.setFixedSize(400, 840)
         self.is_locked = False; self.setlist = []; self.setlist_idx = 0; self.vis_mode = "BAR"
-        self.settings = QSettings("EekohLake", "InnerPulse") 
         self.setStyleSheet(MAIN_STYLE)
         self.eng = AudioEngine(); self.log_win = LogWindow(self); self.last_bt, self.diffs = 0, []
-        self.load_setlist()
         
-        # UI Setup
+        # Load Config & Setlist
+        self.config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), CONFIG_FILENAME)
+        self.json_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), JSON_FILENAME)
+        self.load_config()
+        self.load_setlist_from_json()
+        
         central = QWidget(); self.setCentralWidget(central)
         self.layout = QVBoxLayout(central); self.layout.setContentsMargins(15, 8, 15, 15); self.layout.setSpacing(8)
         
-        self.setup_audio_ui()
-        self.setup_setlist_ui()
-        self.setup_visualizer_ui()
-        self.setup_controls_ui()
-        self.setup_mixer_ui()
-        self.setup_footer_ui()
+        self.setup_audio_ui(); self.setup_setlist_ui(); self.setup_visualizer_ui()
+        self.setup_controls_ui(); self.setup_mixer_ui(); self.setup_footer_ui()
 
         QApplication.instance().installEventFilter(self)
         self.tmr = QTimer(); self.tmr.timeout.connect(self.poll_queue); self.tmr.start(10)
-        self.change_dev()
+        self.change_dev() # Initial boot
+
+    # --- Config Management ---
+    def load_config(self):
+        self.app_config = {"audio_device": "", "buffer_size": "128"}
+        if os.path.exists(self.config_path):
+            try:
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    self.app_config.update(json.load(f))
+            except: pass
+
+    def save_config(self):
+        try:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
+                json.dump(self.app_config, f, indent=2)
+        except: pass
 
     # --- UI Helpers ---
     def setup_audio_ui(self):
         cfg_box = QFrame(); cfg_box.setObjectName("ConfigBox"); cfg_layout = QVBoxLayout(cfg_box)
         tk_dev_lbl = QLabel("AUDIO DEVICE / BUFFER (ASIO/WASAPI優先)")
         tk_dev_lbl.setStyleSheet("font-size: 9px; color: #777; font-weight: bold;")
+        
         self.combo_dev = QComboBox()
-        for i, name in self.eng.get_filtered_devices(): self.combo_dev.addItem(name, i)
+        saved_dev = self.app_config.get("audio_device", "")
+        set_idx = 0
+        for i, (idx, name) in enumerate(self.eng.get_filtered_devices()):
+            self.combo_dev.addItem(name, idx)
+            if name == saved_dev: set_idx = i
+        self.combo_dev.setCurrentIndex(set_idx)
         self.combo_dev.currentIndexChanged.connect(self.change_dev)
-        self.combo_buf = QComboBox(); self.combo_buf.addItems(["64", "128", "256", "512"]); self.combo_buf.setCurrentText("128")
+        
+        self.combo_buf = QComboBox()
+        self.combo_buf.addItems(["64", "128", "256", "512"])
+        self.combo_buf.setCurrentText(self.app_config.get("buffer_size", "128"))
         self.combo_buf.currentIndexChanged.connect(self.change_buf)
+        
         cfg_layout.addWidget(tk_dev_lbl); cfg_layout.addWidget(self.combo_dev); cfg_layout.addWidget(self.combo_buf); self.layout.addWidget(cfg_box)
 
     def setup_setlist_ui(self):
@@ -297,6 +328,23 @@ class InnerPulseQt(QMainWindow):
         self.btn_log = QPushButton("LOG (L)"); self.btn_log.setObjectName("LogBtn"); self.btn_log.setFixedSize(70, 60); self.btn_log.clicked.connect(self.log_win.toggle)
         btn_layout.addWidget(self.btn_start); btn_layout.addWidget(self.btn_log); self.layout.addLayout(btn_layout)
 
+    # --- JSON Management ---
+    def load_setlist_from_json(self):
+        if os.path.exists(self.json_path):
+            try:
+                with open(self.json_path, 'r', encoding='utf-8') as f:
+                    self.setlist = json.load(f)
+            except: self.setlist = []
+        else: self.setlist = []
+        if not self.setlist or self.setlist[0]["name"] != "Default": self.setlist.insert(0, DEFAULT_SONG)
+        self.setlist_idx = 0
+
+    def save_setlist_to_json(self):
+        try:
+            with open(self.json_path, 'w', encoding='utf-8') as f:
+                json.dump(self.setlist, f, indent=2, ensure_ascii=False)
+        except Exception as e: print(f"Save Error: {e}")
+
     # --- Logic ---
     def eventFilter(self, obj, event):
         if event.type() == QEvent.KeyPress and not self.is_locked:
@@ -310,21 +358,35 @@ class InnerPulseQt(QMainWindow):
         return super().eventFilter(obj, event)
 
     def toggle_mode(self): self.vis_mode = "LED" if self.vis_mode == "BAR" else "BAR"; self.btn_mode.setText(f"Mode: {self.vis_mode}"); self.canvas.set_mode(self.vis_mode)
-    def load_setlist(self):
-        data = self.settings.value(SETTING_KEY); self.setlist = json.loads(data) if data else [DEFAULT_SONG]
+    
     def open_editor(self):
         dlg = SetlistEditor(self, self.setlist)
-        if dlg.exec(): self.settings.setValue(SETTING_KEY, json.dumps(self.setlist)); self.setlist_idx = max(0, dlg.jump_to_index) if dlg.jump_to_index >=0 else self.setlist_idx; self.apply_song()
+        if dlg.exec():
+            self.save_setlist_to_json()
+            if dlg.jump_to_index >= 0:
+                if self.eng.is_playing: self.toggle() 
+                self.setlist_idx = dlg.jump_to_index; self.apply_song()
+            else: self.update_song_display()
+
     def prev_song(self):
         if self.eng.is_playing: self.toggle() 
         self.setlist_idx = (self.setlist_idx - 1) % len(self.setlist); self.apply_song()
     def next_song(self):
         if self.eng.is_playing: self.toggle() 
         self.setlist_idx = (self.setlist_idx + 1) % len(self.setlist); self.apply_song()
-    def apply_song(self): s = self.setlist[self.setlist_idx]; self.sp_bpm_obj[1].setValue(s["bpm"]); self.sp_bpb_obj[1].setValue(s["bpb"]); self.lbl_song.setText(f"{self.setlist_idx+1}. {s['name']}")
-    def change_dev(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.device_index=self.combo_dev.currentData(); self.eng.boot(); QTimer.singleShot(1500, self.unlock_controls)
+    def apply_song(self): s = self.setlist[self.setlist_idx]; self.sp_bpm_obj[1].setValue(s["bpm"]); self.sp_bpb_obj[1].setValue(s["bpb"]); self.update_song_display()
+    def update_song_display(self): self.lbl_song.setText(f"{self.setlist_idx+1}. {self.setlist[self.setlist_idx]['name']}")
+    
+    def change_dev(self): 
+        self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.device_index=self.combo_dev.currentData(); self.eng.boot(); QTimer.singleShot(1500, self.unlock_controls)
+        self.app_config["audio_device"] = self.combo_dev.currentText(); self.save_config() # Save on change
+
     def unlock_controls(self): self.is_locked = False; self.btn_start.setText("START"); self.btn_start.setEnabled(True)
-    def change_buf(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.buffer_size=int(self.combo_buf.currentText()); self.eng.boot(); QTimer.singleShot(1000, self.unlock_controls)
+    
+    def change_buf(self): 
+        self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.buffer_size=int(self.combo_buf.currentText()); self.eng.boot(); QTimer.singleShot(1000, self.unlock_controls)
+        self.app_config["buffer_size"] = self.combo_buf.currentText(); self.save_config() # Save on change
+
     def toggle(self):
         if self.eng.is_playing: self.eng.pause(); self.btn_start.setText("START"); self.btn_start.setStyleSheet("background: #007acc;")
         else: self.canvas.reset_pos(); self.eng.request_start(); self.btn_start.setText("STOP"); self.btn_start.setStyleSheet("background: #c30; border: 1px solid #900;"); self.last_bt, self.diffs = 0, []; self.log_win.log(f"[START] BPM:{self.eng.params['bpm']} Dev:{self.eng.current_device_name}")
@@ -343,4 +405,5 @@ class InnerPulseQt(QMainWindow):
                 self.last_bt = d["ts"]
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     app = QApplication(sys.argv); window = InnerPulseQt(); window.show(); sys.exit(app.exec())

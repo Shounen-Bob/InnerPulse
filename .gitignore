@@ -4,4 +4,4 @@ dist/
 __pycache__/
 *.pyc
 InnerPulse.exe
-config.json
+*.json
