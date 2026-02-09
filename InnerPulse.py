@@ -7,7 +7,32 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
 from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor
 
 # ==========================================
-#  Audio Engine (Class A Precision)
+#  Constants & Config
+# ==========================================
+APP_NAME = "InnerPulse"
+APP_VERSION = "v1.6.0"
+SETTING_KEY = "setlist_v2"
+DEFAULT_SONG = {"name": "Default", "bpm": 120, "bpb": 4}
+
+MAIN_STYLE = """
+    QMainWindow { background-color: #1e1e1e; }
+    QLabel { color: #ccc; font-family: 'Helvetica Neue', Helvetica; }
+    QFrame#ConfigBox, QFrame#SetlistBox { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }
+    QComboBox { background: #333; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px; font-size: 11px; }
+    QComboBox QAbstractItemView { background-color: #2a2a2a; color: #eee; selection-background-color: #5c6b8a; border: 1px solid #444; }
+    QSpinBox { background: #111; color: #44ff44; padding: 5px; font-size: 16px; border-radius: 5px; font-weight: bold; }
+    QSpinBox:disabled { color: #444; background: #222; }
+    QPushButton#StartBtn { background: #007acc; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; border: 1px solid #005a9e; }
+    QPushButton#StartBtn:disabled { background: #333; color: #666; border: 1px solid #222; }
+    QPushButton#ModeBtn, QPushButton#NavBtn { background: #444; color: #eee; border-radius: 6px; font-size: 11px; font-weight: bold; }
+    QPushButton#LogBtn, QPushButton#EditBtn { background: #5c6b8a; color: #dae0ed; border-radius: 8px; font-weight: bold; font-size: 11px; }
+    QCheckBox { color: #ffcc00; font-weight: bold; font-size: 12px; }
+    QSlider::groove:vertical { background: #111; width: 8px; border-radius: 4px; }
+    QSlider::handle:vertical { background: #999; height: 16px; margin: 0 -3px; border-radius: 3px; }
+"""
+
+# ==========================================
+#  Audio Engine
 # ==========================================
 class AudioEngine:
     def __init__(self):
@@ -18,21 +43,28 @@ class AudioEngine:
         self.device_index = None
         self.buffer_size = 128
         self.waves = {}
-        self.params = {"bpm": 120, "bpb": 4, "play": 3, "mute": 1, "v_master": 0.8, "v_acc": 0.8, "v_4th": 0.5, "v_8th": 0.0, "v_16th": 0.0, "v_trip": 0.0, "v_mute_dim": 0.0, "rnd": False}
+        self.params = {
+            "bpm": 120, "bpb": 4, "play": 3, "mute": 1, 
+            "v_master": 0.8, "v_acc": 0.8, "v_4th": 0.5, "v_8th": 0.0, 
+            "v_16th": 0.0, "v_trip": 0.0, "v_mute_dim": 0.0, "rnd": False
+        }
         self.state = {"total_samples": 0, "next_tick": 0, "tick_count": 0, "is_mute": False, "active_voices": [], "zero_offset": 0, "rnd_phase": "play", "rnd_left": 3}
         self.queue = queue.Queue()
         self.current_device_name = "None"
+        self.last_sent_pos = 0.0
 
     def update(self, key, val): self.params[key] = val
 
     def get_filtered_devices(self):
         try:
-            devs = sd.query_devices(); hostapis = sd.query_hostapis(); output_list = []
-            for i, d in enumerate(devs):
+            devices = sd.query_devices(); hostapis = sd.query_hostapis(); candidates = []; has_high_perf = False
+            for i, d in enumerate(devices):
                 if d['max_output_channels'] > 0:
                     api_name = hostapis[d['hostapi']]['name']
-                    output_list.append((i, f"{api_name}: {d['name']}"))
-            return output_list
+                    is_good = any(x in api_name for x in ["ASIO", "WASAPI", "Core Audio"])
+                    if is_good: has_high_perf = True
+                    candidates.append((i, f"{api_name}: {d['name']}", is_good))
+            return [c[:2] for c in candidates if not has_high_perf or c[2]]
         except: return []
 
     def _make_wave(self, type="sine", freq=1000, duration=0.1):
@@ -85,8 +117,8 @@ class AudioEngine:
                 if wav_cur + L < len(wav): new_voices.append([wav_cur+L, wav, vol, s_off-frames])
             elif s_off > frames: new_voices.append([cur, wav, vol, s_off-frames])
         st["active_voices"] = new_voices; outdata *= self.params["v_master"]
-        pos = ((end_s - st["zero_offset"]) / self.sr) * (self.params["bpm"] / 60.0) - 0.025 * (self.params["bpm"] / 60.0)
-        self.queue.put({"type": "vis", "pos": max(-1.0, pos), "mute": st["is_mute"]})
+        self.last_sent_pos = ((end_s - st["zero_offset"]) / self.sr) * (self.params["bpm"] / 60.0) - 0.025 * (self.params["bpm"] / 60.0)
+        self.queue.put({"type": "vis", "pos": max(-1.0, self.last_sent_pos), "mute": st["is_mute"]})
 
     def _trigger(self, off):
         st, p = self.state, self.params; tpb = 12 * p["bpb"]
@@ -96,34 +128,43 @@ class AudioEngine:
                 if st["rnd_left"] <= 0: st["rnd_phase"] = "mute" if st["rnd_phase"] == "play" else "play"; st["rnd_left"] = random.randint(1, 2)
                 st["is_mute"] = (st["rnd_phase"] == "mute")
             else: st["is_mute"] = ((st["tick_count"] // tpb) % (p["play"] + p["mute"])) >= p["play"]
+        
         beat, tick, is_m = ((st["tick_count"] % tpb) // 12) + 1, st["tick_count"] % 12, st["is_mute"]
         vol_m = p["v_mute_dim"] if is_m else 1.0
-        if vol_m > 0:
-            vs = []
-            if tick == 0:
-                if beat == 1 and p["v_acc"] > 0: vs.append((self.waves["acc"], p["v_acc"]))
-                elif p["v_4th"] > 0: vs.append((self.waves["4th"], p["v_4th"]))
-            if tick == 6 and p["v_8th"] > 0: vs.append((self.waves["8th"], p["v_8th"]))
-            if (tick == 3 or tick == 9) and p["v_16th"] > 0: vs.append((self.waves["16th"], p["v_16th"]))
-            if (tick == 4 or tick == 8) and p["v_trip"] > 0: vs.append((self.waves["trip"], p["v_trip"]))
-            for w, v in vs: st["active_voices"].append([0, w, v * vol_m, off])
+        
+        triggers = []
         if tick == 0:
-            # ★現在の発音サンプル位置（next_tickではなく現在のサンプル）に基づいて角度を計算
-            curr_pos = (st["next_tick"] - st["zero_offset"]) / self.sr
-            angle = 30.0 * math.cos((curr_pos - 0.025) * (p["bpm"]/60.0) * math.pi)
+            if beat == 1:
+                if p["v_acc"] > 0 and vol_m > 0: triggers.append((self.waves["acc"], p["v_acc"]))
+            else:
+                if p["v_4th"] > 0 and vol_m > 0: triggers.append((self.waves["4th"], p["v_4th"]))
+        
+        if vol_m > 0:
+            if tick == 6 and p["v_8th"] > 0: triggers.append((self.waves["8th"], p["v_8th"]))
+            if (tick == 3 or tick == 9) and p["v_16th"] > 0: triggers.append((self.waves["16th"], p["v_16th"]))
+            if (tick == 4 or tick == 8) and p["v_trip"] > 0: triggers.append((self.waves["trip"], p["v_trip"]))
+
+        for w, v in triggers: st["active_voices"].append([0, w, v * vol_m, off])
+
+        if tick == 0:
+            angle = 30.0 * math.cos(self.last_sent_pos * math.pi)
             self.queue.put({"type": "evt", "ts": time.perf_counter(), "mute": is_m, "beat": beat, "bar": (st["tick_count"] // tpb) + 1, "vis_err": 30.0 - abs(angle)})
 
 # ==========================================
-#  Setlist Components
+#  UI Components
 # ==========================================
 class SetlistEditor(QDialog):
     def __init__(self, parent=None, setlist=[]):
         super().__init__(parent); self.setWindowTitle("Setlist Editor"); self.resize(400, 450)
-        self.setStyleSheet("background: #222; color: #eee;")
+        self.setStyleSheet("""
+            QDialog { background: #222; color: #eee; }
+            QTableWidget { background: #333; gridline-color: #444; }
+            QTableWidget::item:selected { background-color: #007acc; color: white; }
+            QHeaderView::section { background-color: #444; color: #ddd; border: 1px solid #555; }
+        """)
         self.setlist = setlist; self.jump_to_index = -1; layout = QVBoxLayout(self)
         self.table = QTableWidget(len(setlist), 3); self.table.setHorizontalHeaderLabels(["Song Name", "BPM", "Beats"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.table.setStyleSheet("QTableWidget { background: #333; gridline-color: #444; selection-background-color: #0cf; }")
         self.table.setSelectionBehavior(QTableWidget.SelectRows); self.table.cellDoubleClicked.connect(self.load_and_close)
         for i, s in enumerate(setlist):
             name_item = QTableWidgetItem(s["name"])
@@ -132,16 +173,15 @@ class SetlistEditor(QDialog):
         layout.addWidget(self.table)
         btn_layout = QGridLayout(); btn_add = QPushButton("+ Add Song"); btn_add.clicked.connect(self.add_row)
         btn_del = QPushButton("- Remove Selected"); btn_del.clicked.connect(self.del_row)
-        btn_save = QPushButton("Save List"); btn_save.clicked.connect(self.save_only)
-        btn_load = QPushButton("LOAD SELECTED"); btn_load.setStyleSheet("background: #0cf; color: #000; font-weight: bold;"); btn_load.clicked.connect(self.load_and_close)
-        btn_layout.addWidget(btn_add, 0, 0); btn_layout.addWidget(btn_del, 0, 1); btn_layout.addWidget(btn_save, 1, 0); btn_layout.addWidget(btn_load, 1, 1); layout.addLayout(btn_layout)
+        btn_load = QPushButton("LOAD SELECTED"); btn_load.setStyleSheet("background: #007acc; color: white; font-weight: bold;"); btn_load.clicked.connect(self.load_and_close)
+        btn_layout.addWidget(btn_add, 0, 0); btn_layout.addWidget(btn_del, 0, 1); btn_layout.addWidget(btn_load, 1, 0, 1, 2); layout.addLayout(btn_layout)
     def add_row(self):
         row = self.table.rowCount(); self.table.insertRow(row); self.table.setItem(row, 0, QTableWidgetItem(f"New Song {row}")); self.table.setItem(row, 1, QTableWidgetItem("120")); self.table.setItem(row, 2, QTableWidgetItem("4"))
     def del_row(self):
         idx = self.table.currentRow(); 
         if idx > 0: self.table.removeRow(idx)
-    def save_only(self): self._sync_setlist(); self.accept()
     def load_and_close(self): self.jump_to_index = self.table.currentRow(); self._sync_setlist(); self.accept()
+    def accept(self): self._sync_setlist(); super().accept()
     def _sync_setlist(self):
         new_list = []
         for i in range(self.table.rowCount()):
@@ -149,9 +189,6 @@ class SetlistEditor(QDialog):
             except: continue
         self.setlist[:] = new_list
 
-# ==========================================
-#  Main UI (v1.4.6 Final Stability)
-# ==========================================
 class LogWindow(QWidget):
     def __init__(self, parent=None):
         super().__init__(); self.setWindowTitle("InnerPulse Log"); self.resize(450, 350)
@@ -159,144 +196,6 @@ class LogWindow(QWidget):
         layout = QVBoxLayout(self); self.text = QTextEdit(); self.text.setReadOnly(True); layout.addWidget(self.text); self.parent_app = parent
     def log(self, msg): self.text.append(msg); self.text.ensureCursorVisible()
     def toggle(self): self.hide() if self.isVisible() else (self.show(), self.raise_())
-
-class InnerPulseQt(QMainWindow):
-    def __init__(self):
-        super().__init__(); self.setWindowTitle("InnerPulse v1.4.6"); self.setFixedSize(400, 840)
-        self.is_locked = False; self.setlist = []; self.setlist_idx = 0; self.vis_mode = "BAR"
-        self.settings = QSettings("EekohLake", "InnerPulse") 
-        
-        self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e1e; }
-            QLabel { color: #ccc; font-family: 'Helvetica Neue', Helvetica; }
-            QFrame#ConfigBox, QFrame#SetlistBox { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }
-            QComboBox { background: #333; color: white; border: 1px solid #444; padding: 3px; border-radius: 4px; font-size: 11px; }
-            QComboBox QAbstractItemView { background-color: #2a2a2a; color: #eee; selection-background-color: #5c6b8a; border: 1px solid #444; }
-            QSpinBox { background: #111; color: #44ff44; padding: 5px; font-size: 16px; border-radius: 5px; font-weight: bold; }
-            QSpinBox:disabled { color: #444; background: #222; }
-            QPushButton#StartBtn { background: #007acc; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; border: 1px solid #005a9e; }
-            QPushButton#StartBtn:disabled { background: #333; color: #666; border: 1px solid #222; }
-            QPushButton#ModeBtn, QPushButton#NavBtn { background: #444; color: #eee; border-radius: 6px; font-size: 11px; font-weight: bold; }
-            QPushButton#LogBtn, QPushButton#EditBtn { background: #5c6b8a; color: #dae0ed; border-radius: 8px; font-weight: bold; font-size: 11px; }
-            QCheckBox { color: #ffcc00; font-weight: bold; font-size: 12px; }
-            QSlider::groove:vertical { background: #111; width: 8px; border-radius: 4px; }
-            QSlider::handle:vertical { background: #999; height: 16px; margin: 0 -3px; border-radius: 3px; }
-        """)
-        self.eng = AudioEngine(); self.log_win = LogWindow(self); self.last_bt, self.diffs = 0, []
-        self.load_setlist()
-        
-        central = QWidget(); self.setCentralWidget(central)
-        self.layout = QVBoxLayout(central); self.layout.setContentsMargins(15, 8, 15, 15); self.layout.setSpacing(8)
-        
-        # Audio Config
-        cfg_box = QFrame(); cfg_box.setObjectName("ConfigBox"); cfg_layout = QVBoxLayout(cfg_box)
-        tk_dev_lbl = QLabel("AUDIO DEVICE / BUFFER (※低いほど高精度)")
-        tk_dev_lbl.setStyleSheet("font-size: 9px; color: #777; font-weight: bold;")
-        self.combo_dev = QComboBox()
-        for i, name in self.eng.get_filtered_devices(): self.combo_dev.addItem(name, i)
-        self.combo_dev.currentIndexChanged.connect(self.change_dev)
-        self.combo_buf = QComboBox(); self.combo_buf.addItems(["64", "128", "256", "512"]); self.combo_buf.setCurrentText("128")
-        self.combo_buf.currentIndexChanged.connect(self.change_buf)
-        cfg_layout.addWidget(tk_dev_lbl); cfg_layout.addWidget(self.combo_dev); cfg_layout.addWidget(self.combo_buf); self.layout.addWidget(cfg_box)
-
-        # Setlist
-        sl_box = QFrame(); sl_box.setObjectName("SetlistBox"); sl_layout = QVBoxLayout(sl_box)
-        top_sl = QHBoxLayout(); self.btn_prev = QPushButton("<"); self.btn_prev.setObjectName("NavBtn"); self.btn_prev.setFixedSize(30, 30); self.btn_prev.clicked.connect(self.prev_song)
-        self.lbl_song = QLabel("Default"); self.lbl_song.setAlignment(Qt.AlignCenter); self.lbl_song.setStyleSheet("font-weight: bold; color: #0cf; font-size: 14px;")
-        self.btn_next = QPushButton(">"); self.btn_next.setObjectName("NavBtn"); self.btn_next.setFixedSize(30, 30); self.btn_next.clicked.connect(self.next_song)
-        top_sl.addWidget(self.btn_prev); top_sl.addWidget(self.lbl_song); top_sl.addWidget(self.btn_next)
-        self.btn_edit = QPushButton("SETLIST EDITOR (LIST)"); self.btn_edit.setObjectName("EditBtn"); self.btn_edit.setFixedHeight(25); self.btn_edit.clicked.connect(self.open_editor)
-        sl_layout.addLayout(top_sl); sl_layout.addWidget(self.btn_edit); self.layout.addWidget(sl_box)
-
-        self.btn_mode = QPushButton("Mode: BAR"); self.btn_mode.setObjectName("ModeBtn"); self.btn_mode.setFixedSize(110, 25); self.btn_mode.clicked.connect(self.toggle_mode)
-        self.layout.addWidget(self.btn_mode, 0, Qt.AlignCenter)
-
-        self.canvas = VisualizerWidget(); self.layout.addWidget(self.canvas)
-        self.lbl_bar = QLabel("Bar: 0"); self.lbl_bar.setAlignment(Qt.AlignCenter); self.lbl_bar.setStyleSheet("font-size: 20px; color: #555; font-weight: bold;"); self.layout.addWidget(self.lbl_bar)
-
-        ctrl_grid = QGridLayout()
-        self.sp_bpm_obj = self.create_spin("BPM", 40, 300, 120, "bpm"); self.sp_bpb_obj = self.create_spin("BEATS", 1, 8, 4, "bpb")
-        self.sp_play_obj = self.create_spin("PLAY BARS", 1, 16, 3, "play"); self.sp_mute_obj = self.create_spin("MUTE BARS", 0, 16, 1, "mute")
-        ctrl_grid.addWidget(self.sp_bpm_obj[0], 0, 0); ctrl_grid.addWidget(self.sp_bpm_obj[1], 1, 0); ctrl_grid.addWidget(self.sp_bpb_obj[0], 0, 1); ctrl_grid.addWidget(self.sp_bpb_obj[1], 1, 1)
-        ctrl_grid.addWidget(self.sp_play_obj[0], 2, 0); ctrl_grid.addWidget(self.sp_play_obj[1], 3, 0); ctrl_grid.addWidget(self.sp_mute_obj[0], 2, 1); ctrl_grid.addWidget(self.sp_mute_obj[1], 3, 1)
-        self.layout.addLayout(ctrl_grid)
-
-        self.chk_rnd = QCheckBox("RANDOM TRAINING (R)"); self.chk_rnd.stateChanged.connect(self.sync_random_ui); self.layout.addWidget(self.chk_rnd, 0, Qt.AlignCenter)
-
-        mix_layout = QHBoxLayout()
-        for label, k, v, c in [("MST","v_master",0.8,"#fff"), ("ACC","v_acc",0.8,"#fc0"), ("4TH","v_4th",0.5,"#0cf"), ("8TH","v_8th",0.0,"#0cf"), ("16T","v_16th",0.0,"#0cf"), ("TRP","v_trip",0.0,"#f6c"), ("MUTE","v_mute_dim",0.0,"#888")]:
-            v_box = QVBoxLayout(); v_box.setAlignment(Qt.AlignCenter); sld = QSlider(Qt.Vertical); sld.setRange(0, 100); sld.setValue(int(v*100)); sld.setFixedHeight(100); sld.setFocusPolicy(Qt.NoFocus); sld.valueChanged.connect(lambda val, key=k: self.eng.update(key, val/100.0))
-            lbl = QLabel(label); lbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 9px;"); v_box.addWidget(sld); v_box.addWidget(lbl); mix_layout.addLayout(v_box)
-        self.layout.addLayout(mix_layout)
-
-        btn_layout = QHBoxLayout()
-        self.btn_start = QPushButton("START"); self.btn_start.setObjectName("StartBtn"); self.btn_start.setFixedHeight(60); self.btn_start.clicked.connect(self.toggle)
-        self.btn_log = QPushButton("LOG (L)"); self.btn_log.setObjectName("LogBtn"); self.btn_log.setFixedSize(70, 60); self.btn_log.clicked.connect(self.log_win.toggle)
-        btn_layout.addWidget(self.btn_start); btn_layout.addWidget(self.btn_log); self.layout.addLayout(btn_layout)
-
-        QApplication.instance().installEventFilter(self); self.tmr = QTimer(); self.tmr.timeout.connect(self.poll_queue); self.tmr.start(10); self.change_dev(); self.update_song_display()
-
-    def eventFilter(self, obj, event):
-        if event.type() == QEvent.KeyPress and not self.is_locked:
-            key = event.key()
-            if key == Qt.Key_Space: self.toggle(); return True 
-            elif key == Qt.Key_L: self.log_win.toggle(); return True
-            elif key == Qt.Key_M: self.toggle_mode(); return True
-            elif key == Qt.Key_R: self.chk_rnd.setChecked(not self.chk_rnd.isChecked()); return True
-            elif key == Qt.Key_Left: self.prev_song(); return True
-            elif key == Qt.Key_Right: self.next_song(); return True
-        return super().eventFilter(obj, event)
-
-    def toggle_mode(self): self.vis_mode = "LED" if self.vis_mode == "BAR" else "BAR"; self.btn_mode.setText(f"Mode: {self.vis_mode}"); self.canvas.set_mode(self.vis_mode)
-    def load_setlist(self):
-        data = self.settings.value("setlist_v2")
-        if data:
-            try: self.setlist = json.loads(data)
-            except: self.setlist = []
-        if not self.setlist or self.setlist[0]["name"] != "Default": self.setlist.insert(0, {"name": "Default", "bpm": 120, "bpb": 4})
-        self.setlist_idx = 0
-    def open_editor(self):
-        dlg = SetlistEditor(self, self.setlist)
-        if dlg.exec():
-            self.settings.setValue("setlist_v2", json.dumps(self.setlist))
-            if dlg.jump_to_index >= 0: self.setlist_idx = dlg.jump_to_index; self.apply_song()
-            else: self.update_song_display()
-    def prev_song(self): self.setlist_idx = (self.setlist_idx - 1) % len(self.setlist); self.apply_song()
-    def next_song(self): self.setlist_idx = (self.setlist_idx + 1) % len(self.setlist); self.apply_song()
-    def apply_song(self): s = self.setlist[self.setlist_idx]; self.sp_bpm_obj[1].setValue(s["bpm"]); self.sp_bpb_obj[1].setValue(s["bpb"]); self.update_song_display()
-    def update_song_display(self): self.lbl_song.setText(f"{self.setlist_idx+1}. {self.setlist[self.setlist_idx]['name']}")
-    def sync_random_ui(self, state): is_rnd = (state == 2); self.eng.update("rnd", is_rnd); self.sp_play_obj[1].setEnabled(not is_rnd); self.sp_mute_obj[1].setEnabled(not is_rnd)
-    def change_dev(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.btn_start.setEnabled(False); self.eng.device_index=self.combo_dev.currentData(); self.eng.boot(); QTimer.singleShot(1500, self.unlock_controls)
-    def change_buf(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.btn_start.setEnabled(False); self.eng.buffer_size=int(self.combo_buf.currentText()); self.eng.boot(); QTimer.singleShot(1000, self.unlock_controls)
-    def unlock_controls(self): self.is_locked = False; self.btn_start.setText("START"); self.btn_start.setEnabled(True)
-
-    def toggle(self):
-        if self.eng.is_playing:
-            self.eng.pause(); self.btn_start.setText("START"); self.btn_start.setStyleSheet("background: #007acc;")
-            if len(self.diffs) > 1: # 最初の1拍目を除外して精度を計算
-                stats = self.diffs[1:]
-                avg = sum(map(abs, stats))/len(stats)
-                self.log_win.log(f"[SUMMARY] Avg Drift (Stable): {avg:.2f}ms\n" + "-"*35)
-        else:
-            self.canvas.reset_pos(); self.eng.request_start(); self.btn_start.setText("STOP"); self.btn_start.setStyleSheet("background: #c30; border: 1px solid #900;")
-            self.last_bt, self.diffs = 0, []; self.log_win.log(f"[START] BPM:{self.eng.params['bpm']} Dev:{self.eng.current_device_name}")
-
-    def create_spin(self, label, min_v, max_v, def_v, key):
-        lbl = QLabel(label); lbl.setAlignment(Qt.AlignCenter); lbl.setStyleSheet("color: #888; font-size: 10px; font-weight: bold;")
-        sp = QSpinBox(); sp.setRange(min_v, max_v); sp.setValue(def_v); sp.setAlignment(Qt.AlignCenter); sp.valueChanged.connect(lambda v: self.eng.update(key, v)); self.eng.update(key, def_v); return lbl, sp
-
-    def poll_queue(self):
-        while not self.eng.queue.empty():
-            d = self.eng.queue.get()
-            if d["type"] == "vis": self.canvas.update_pos(d["pos"], d["mute"], self.eng.params["bpb"])
-            elif d["type"] == "evt":
-                self.lbl_bar.setText(f"Bar: {d['bar']}")
-                if self.last_bt > 0:
-                    df = (d["ts"] - self.last_bt - (60.0/self.eng.params["bpm"])) * 1000
-                    self.diffs.append(df)
-                    # ★修正：Visは音が鳴った瞬間の角度を表示するように
-                    self.log_win.log(f"[{'MUTE' if d['mute'] else 'PLAY'}] Bar:{d['bar']} Beat:{d['beat']} (Df:{df:+.1f}ms) | Vis:{d['vis_err']:.4f}°")
-                self.last_bt = d["ts"]
 
 class VisualizerWidget(QWidget):
     def __init__(self): super().__init__(); self.setMinimumHeight(200); self.pos, self.mute, self.bpb, self.mode = -1.0, False, 4, "BAR"
@@ -313,12 +212,135 @@ class VisualizerWidget(QWidget):
             p.setPen(QPen(QColor("#555"), 3)); p.drawLine(cx, cy, x, y)
             p.setPen(QPen(col if is_active else QColor("#555"), 4)); p.setBrush(QColor("#222")); p.drawEllipse(QPointF(x, y), 18, 18)
         else:
-            p.setPen(Qt.NoPen); phase = int(self.pos) % 2 if is_active else -1
-            p.setBrush(col if phase == 0 else QColor("#222")); p.drawEllipse(cx-100, 60, 60, 60)
-            p.setBrush(col if phase == 1 else QColor("#222")); p.drawEllipse(cx+40, 60, 60, 60)
+            if is_active:
+                p.setPen(Qt.NoPen); phase = int(self.pos) % 2
+                p.setBrush(col if phase == 0 else QColor("#222")); p.drawEllipse(cx-100, 60, 60, 60)
+                p.setBrush(col if phase == 1 else QColor("#222")); p.drawEllipse(cx+40, 60, 60, 60)
         p.setPen(col if is_active else QColor("#555")); p.setFont(QFont("Impact", 36))
         txt = ("MUTE" if self.mute else str(int(self.pos) % self.bpb + 1)) if is_active else "STOP"
         p.drawText(self.rect(), Qt.AlignCenter, txt)
 
+# ==========================================
+#  Main Application
+# ==========================================
+class InnerPulseQt(QMainWindow):
+    def __init__(self):
+        super().__init__(); self.setWindowTitle(f"{APP_NAME} {APP_VERSION}"); self.setFixedSize(400, 840)
+        self.is_locked = False; self.setlist = []; self.setlist_idx = 0; self.vis_mode = "BAR"
+        self.settings = QSettings("EekohLake", "InnerPulse") 
+        self.setStyleSheet(MAIN_STYLE)
+        self.eng = AudioEngine(); self.log_win = LogWindow(self); self.last_bt, self.diffs = 0, []
+        self.load_setlist()
+        
+        # UI Setup
+        central = QWidget(); self.setCentralWidget(central)
+        self.layout = QVBoxLayout(central); self.layout.setContentsMargins(15, 8, 15, 15); self.layout.setSpacing(8)
+        
+        self.setup_audio_ui()
+        self.setup_setlist_ui()
+        self.setup_visualizer_ui()
+        self.setup_controls_ui()
+        self.setup_mixer_ui()
+        self.setup_footer_ui()
+
+        QApplication.instance().installEventFilter(self)
+        self.tmr = QTimer(); self.tmr.timeout.connect(self.poll_queue); self.tmr.start(10)
+        self.change_dev()
+
+    # --- UI Helpers ---
+    def setup_audio_ui(self):
+        cfg_box = QFrame(); cfg_box.setObjectName("ConfigBox"); cfg_layout = QVBoxLayout(cfg_box)
+        tk_dev_lbl = QLabel("AUDIO DEVICE / BUFFER (ASIO/WASAPI優先)")
+        tk_dev_lbl.setStyleSheet("font-size: 9px; color: #777; font-weight: bold;")
+        self.combo_dev = QComboBox()
+        for i, name in self.eng.get_filtered_devices(): self.combo_dev.addItem(name, i)
+        self.combo_dev.currentIndexChanged.connect(self.change_dev)
+        self.combo_buf = QComboBox(); self.combo_buf.addItems(["64", "128", "256", "512"]); self.combo_buf.setCurrentText("128")
+        self.combo_buf.currentIndexChanged.connect(self.change_buf)
+        cfg_layout.addWidget(tk_dev_lbl); cfg_layout.addWidget(self.combo_dev); cfg_layout.addWidget(self.combo_buf); self.layout.addWidget(cfg_box)
+
+    def setup_setlist_ui(self):
+        sl_box = QFrame(); sl_box.setObjectName("SetlistBox"); sl_layout = QVBoxLayout(sl_box)
+        top_sl = QHBoxLayout()
+        self.btn_prev = QPushButton("<"); self.btn_prev.setObjectName("NavBtn"); self.btn_prev.setFixedSize(30, 30); self.btn_prev.clicked.connect(self.prev_song)
+        self.lbl_song = QLabel("Default"); self.lbl_song.setAlignment(Qt.AlignCenter); self.lbl_song.setStyleSheet("font-weight: bold; color: #0cf; font-size: 14px")
+        self.btn_next = QPushButton(">"); self.btn_next.setObjectName("NavBtn"); self.btn_next.setFixedSize(30, 30); self.btn_next.clicked.connect(self.next_song)
+        top_sl.addWidget(self.btn_prev); top_sl.addWidget(self.lbl_song); top_sl.addWidget(self.btn_next)
+        self.btn_edit = QPushButton("SETLIST EDITOR (LIST)"); self.btn_edit.setObjectName("EditBtn"); self.btn_edit.setFixedHeight(25); self.btn_edit.clicked.connect(self.open_editor)
+        sl_layout.addLayout(top_sl); sl_layout.addWidget(self.btn_edit); self.layout.addWidget(sl_box)
+
+    def setup_visualizer_ui(self):
+        self.btn_mode = QPushButton("Mode: BAR"); self.btn_mode.setObjectName("ModeBtn"); self.btn_mode.setFixedSize(110, 25); self.btn_mode.clicked.connect(self.toggle_mode)
+        self.layout.addWidget(self.btn_mode, 0, Qt.AlignCenter)
+        self.canvas = VisualizerWidget(); self.layout.addWidget(self.canvas)
+        self.lbl_bar = QLabel("Bar: 0"); self.lbl_bar.setAlignment(Qt.AlignCenter); self.lbl_bar.setStyleSheet("font-size: 20px; color: #555; font-weight: bold;"); self.layout.addWidget(self.lbl_bar)
+
+    def setup_controls_ui(self):
+        ctrl_grid = QGridLayout()
+        self.sp_bpm_obj = self.create_spin("BPM", 40, 300, 120, "bpm"); self.sp_bpb_obj = self.create_spin("BEATS", 1, 8, 4, "bpb")
+        ctrl_grid.addWidget(self.sp_bpm_obj[0], 0, 0); ctrl_grid.addWidget(self.sp_bpm_obj[1], 1, 0); ctrl_grid.addWidget(self.sp_bpb_obj[0], 0, 1); ctrl_grid.addWidget(self.sp_bpb_obj[1], 1, 1)
+        self.sp_play_obj = self.create_spin("PLAY BARS", 1, 16, 3, "play"); self.sp_mute_obj = self.create_spin("MUTE BARS", 0, 16, 1, "mute")
+        ctrl_grid.addWidget(self.sp_play_obj[0], 2, 0); ctrl_grid.addWidget(self.sp_play_obj[1], 3, 0); ctrl_grid.addWidget(self.sp_mute_obj[0], 2, 1); ctrl_grid.addWidget(self.sp_mute_obj[1], 3, 1)
+        self.layout.addLayout(ctrl_grid)
+        self.chk_rnd = QCheckBox("RANDOM TRAINING (R)"); self.chk_rnd.stateChanged.connect(self.sync_random_ui); self.layout.addWidget(self.chk_rnd, 0, Qt.AlignCenter)
+
+    def setup_mixer_ui(self):
+        mix_layout = QHBoxLayout()
+        for label, k, v, c in [("MST","v_master",0.8,"#fff"), ("ACC","v_acc",0.8,"#fc0"), ("4TH","v_4th",0.5,"#0cf"), ("8TH","v_8th",0.0,"#0cf"), ("16T","v_16th",0.0,"#0cf"), ("TRP","v_trip",0.0,"#f6c"), ("MUTE","v_mute_dim",0.0,"#888")]:
+            v_box = QVBoxLayout(); v_box.setAlignment(Qt.AlignCenter); sld = QSlider(Qt.Vertical); sld.setRange(0, 100); sld.setValue(int(v*100)); sld.setFixedHeight(100); sld.setFocusPolicy(Qt.NoFocus); sld.valueChanged.connect(lambda val, key=k: self.eng.update(key, val/100.0))
+            lbl = QLabel(label); lbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 9px;"); v_box.addWidget(sld); v_box.addWidget(lbl); mix_layout.addLayout(v_box)
+        self.layout.addLayout(mix_layout)
+
+    def setup_footer_ui(self):
+        btn_layout = QHBoxLayout()
+        self.btn_start = QPushButton("START"); self.btn_start.setObjectName("StartBtn"); self.btn_start.setFixedHeight(60); self.btn_start.clicked.connect(self.toggle)
+        self.btn_log = QPushButton("LOG (L)"); self.btn_log.setObjectName("LogBtn"); self.btn_log.setFixedSize(70, 60); self.btn_log.clicked.connect(self.log_win.toggle)
+        btn_layout.addWidget(self.btn_start); btn_layout.addWidget(self.btn_log); self.layout.addLayout(btn_layout)
+
+    # --- Logic ---
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and not self.is_locked:
+            key = event.key()
+            if key == Qt.Key_Space: self.toggle(); return True 
+            elif key == Qt.Key_M: self.toggle_mode(); return True
+            elif key == Qt.Key_L: self.log_win.toggle(); return True
+            elif key == Qt.Key_R: self.chk_rnd.setChecked(not self.chk_rnd.isChecked()); return True
+            elif key == Qt.Key_Left: self.prev_song(); return True
+            elif key == Qt.Key_Right: self.next_song(); return True
+        return super().eventFilter(obj, event)
+
+    def toggle_mode(self): self.vis_mode = "LED" if self.vis_mode == "BAR" else "BAR"; self.btn_mode.setText(f"Mode: {self.vis_mode}"); self.canvas.set_mode(self.vis_mode)
+    def load_setlist(self):
+        data = self.settings.value(SETTING_KEY); self.setlist = json.loads(data) if data else [DEFAULT_SONG]
+    def open_editor(self):
+        dlg = SetlistEditor(self, self.setlist)
+        if dlg.exec(): self.settings.setValue(SETTING_KEY, json.dumps(self.setlist)); self.setlist_idx = max(0, dlg.jump_to_index) if dlg.jump_to_index >=0 else self.setlist_idx; self.apply_song()
+    def prev_song(self):
+        if self.eng.is_playing: self.toggle() 
+        self.setlist_idx = (self.setlist_idx - 1) % len(self.setlist); self.apply_song()
+    def next_song(self):
+        if self.eng.is_playing: self.toggle() 
+        self.setlist_idx = (self.setlist_idx + 1) % len(self.setlist); self.apply_song()
+    def apply_song(self): s = self.setlist[self.setlist_idx]; self.sp_bpm_obj[1].setValue(s["bpm"]); self.sp_bpb_obj[1].setValue(s["bpb"]); self.lbl_song.setText(f"{self.setlist_idx+1}. {s['name']}")
+    def change_dev(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.device_index=self.combo_dev.currentData(); self.eng.boot(); QTimer.singleShot(1500, self.unlock_controls)
+    def unlock_controls(self): self.is_locked = False; self.btn_start.setText("START"); self.btn_start.setEnabled(True)
+    def change_buf(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.buffer_size=int(self.combo_buf.currentText()); self.eng.boot(); QTimer.singleShot(1000, self.unlock_controls)
+    def toggle(self):
+        if self.eng.is_playing: self.eng.pause(); self.btn_start.setText("START"); self.btn_start.setStyleSheet("background: #007acc;")
+        else: self.canvas.reset_pos(); self.eng.request_start(); self.btn_start.setText("STOP"); self.btn_start.setStyleSheet("background: #c30; border: 1px solid #900;"); self.last_bt, self.diffs = 0, []; self.log_win.log(f"[START] BPM:{self.eng.params['bpm']} Dev:{self.eng.current_device_name}")
+    def create_spin(self, lbl, min_v, max_v, def_v, key):
+        l = QLabel(lbl); l.setAlignment(Qt.AlignCenter); s = QSpinBox(); s.setRange(min_v, max_v); s.setValue(def_v); s.valueChanged.connect(lambda v: self.eng.update(key, v)); return l, s
+    def sync_random_ui(self, state): is_rnd = (state == 2); self.eng.update("rnd", is_rnd); self.sp_play_obj[1].setEnabled(not is_rnd); self.sp_mute_obj[1].setEnabled(not is_rnd)
+    def poll_queue(self):
+        while not self.eng.queue.empty():
+            d = self.eng.queue.get()
+            if d["type"] == "vis": self.canvas.update_pos(d["pos"], d["mute"], self.eng.params["bpb"])
+            elif d["type"] == "evt":
+                self.lbl_bar.setText(f"Bar: {d['bar']}")
+                if self.last_bt > 0:
+                    df = (d["ts"] - self.last_bt - (60.0/self.eng.params["bpm"])) * 1000
+                    self.diffs.append(df); self.log_win.log(f"[{'MUTE' if d['mute'] else 'PLAY'}] Bar:{d['bar']} Beat:{d['beat']} (Df:{df:+.1f}ms) | Vis:{d['vis_err']:.4f}°")
+                self.last_bt = d["ts"]
+
 if __name__ == "__main__":
-    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling); app = QApplication(sys.argv); window = InnerPulseQt(); window.show(); sys.exit(app.exec())
+    app = QApplication(sys.argv); window = InnerPulseQt(); window.show(); sys.exit(app.exec())
