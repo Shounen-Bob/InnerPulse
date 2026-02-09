@@ -1,560 +1,324 @@
-import tkinter as tk
-from tkinter import ttk
-import numpy as np
-import sounddevice as sd
-import queue
-import time
-import math
-import random
-import json
-import os
+import sys, numpy as np, sounddevice as sd, queue, time, math, random, json, os, platform
+from PySide6.QtCore import Qt, QTimer, QPointF, QRect, QEvent, QObject, QSettings
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+                             QGridLayout, QLabel, QComboBox, QPushButton, QSpinBox, 
+                             QSlider, QFrame, QCheckBox, QTextEdit, QDialog, QTableWidget, 
+                             QTableWidgetItem, QHeaderView, QAbstractItemView)
+from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor
 
 # ==========================================
-#  SETTINGS
-# ==========================================
-VISUAL_DELAY = 0.025 
-CONFIG_FILE = "config.json"
-
-# ==========================================
-#  Audio Engine
+#  Audio Engine (Class A Precision)
 # ==========================================
 class AudioEngine:
     def __init__(self):
         self.stream = None
         self.sr = 48000
         self.is_playing = False
-        self.device_index = None 
-        self.buffer_size = 128 
-        self.waves = {} 
-        self.params = {
-            "bpm": 120, "beats_per_bar": 4,
-            "play_bars": 3, "mute_bars": 1,
-            "vol_master": 0.8,
-            "vol_acc": 0.8, "vol_4th": 0.5, "vol_8th": 0.0, "vol_16th": 0.0, "vol_trip": 0.0, # ★Default 4th to 0.5
-            "vol_mute_dim": 0.0,
-            "random_mode": False
-        }
-        self.state = {
-            "total_samples": 0, "next_tick_sample": 0, "tick_counter": 0,
-            "beat": 0, "bar": 0, "is_mute": False, "active_voices": [],
-            "zero_offset": 0,
-            "rnd_phase": "play",
-            "rnd_bars_left": 3
-        }
+        self.pending_start = False 
+        self.device_index = None
+        self.buffer_size = 128
+        self.waves = {}
+        self.params = {"bpm": 120, "bpb": 4, "play": 3, "mute": 1, "v_master": 0.8, "v_acc": 0.8, "v_4th": 0.5, "v_8th": 0.0, "v_16th": 0.0, "v_trip": 0.0, "v_mute_dim": 0.0, "rnd": False}
+        self.state = {"total_samples": 0, "next_tick": 0, "tick_count": 0, "is_mute": False, "active_voices": [], "zero_offset": 0, "rnd_phase": "play", "rnd_left": 3}
         self.queue = queue.Queue()
-        self.current_device_name = "Unknown" 
+        self.current_device_name = "None"
+
+    def update(self, key, val): self.params[key] = val
 
     def get_filtered_devices(self):
         try:
-            devices = sd.query_devices()
-            hostapis = sd.query_hostapis()
-            candidates = []
-            has_high_perf = False
-            for i, d in enumerate(devices):
+            devs = sd.query_devices(); hostapis = sd.query_hostapis(); output_list = []
+            for i, d in enumerate(devs):
                 if d['max_output_channels'] > 0:
-                    api_info = hostapis[d['hostapi']]
-                    api_name = api_info['name']
-                    is_good = "ASIO" in api_name or "WASAPI" in api_name
-                    if is_good: has_high_perf = True
-                    candidates.append({"id": i, "name": d['name'], "api": api_name, "is_good": is_good})
-
-            output_list = []
-            if has_high_perf:
-                for c in candidates:
-                    if c["is_good"]: output_list.append((c['id'], f"{c['api']}: {c['name']}"))
-            else:
-                for c in candidates: output_list.append((c['id'], f"{c['api']}: {c['name']}"))
+                    api_name = hostapis[d['hostapi']]['name']
+                    output_list.append((i, f"{api_name}: {d['name']}"))
             return output_list
         except: return []
 
-    def set_device(self, index):
-        self.device_index = index
-        if self.stream:
-            self.cleanup()
-            return self._boot_engine()
-        return "Ready"
-
-    def set_buffer_size(self, size):
-        self.buffer_size = int(size)
-        if self.stream:
-            self.cleanup()
-            return self._boot_engine()
-        return "Buffer Set"
-
-    def update(self, key, val):
-        self.params[key] = val
-
     def _make_wave(self, type="sine", freq=1000, duration=0.1):
-        length = int(self.sr * duration)
-        t = np.linspace(0, duration, length, endpoint=False)
-        if type == "bell": 
-            w = np.sin(2 * np.pi * freq * t) + 0.5 * np.sin(2 * np.pi * freq * 2 * t)
-            wave = w * np.exp(-t * 8) * 0.3
-        elif type == "click": 
-            wave = np.tanh(np.sin(2 * np.pi * freq * t) * 5) * np.exp(-t * 20) * 0.5
-        elif type == "hihat": 
-            wave = np.random.uniform(-0.9, 0.9, length) * np.exp(-t * 80) * 0.9 
-        elif type == "shaker": 
-            noise = np.random.uniform(-0.8, 0.8, length)
-            att = np.linspace(0, 1, int(self.sr * 0.005))
-            dec = np.linspace(1, 0, length - len(att))
-            wave = noise * np.concatenate([att, dec]) * 0.8
-        elif type == "wood": 
-            f_sw = np.linspace(freq, freq/2, length)
-            ph = np.cumsum(f_sw) / self.sr * 2 * np.pi
-            wave = np.sin(ph) * np.exp(-t * 30) * 0.6
+        length = int(self.sr * duration); t = np.linspace(0, duration, length, endpoint=False)
+        if type == "bell": wave = (np.sin(2 * np.pi * freq * t) + 0.5 * np.sin(2 * np.pi * freq * 2 * t)) * np.exp(-t * 8) * 0.3
+        elif type == "click": wave = np.tanh(np.sin(2 * np.pi * freq * t) * 5) * np.exp(-t * 20) * 0.5
+        elif type == "hihat": wave = np.random.uniform(-0.9, 0.9, length) * np.exp(-t * 80) * 0.9
+        elif type == "shaker": wave = np.random.uniform(-0.8, 0.8, length) * np.exp(-t * 50) * 0.8
+        elif type == "wood": wave = np.sin(np.cumsum(np.linspace(freq, freq/2, length)) / self.sr * 2 * np.pi) * np.exp(-t * 30) * 0.6
         else: wave = np.zeros(length)
         return wave.astype(np.float32)
 
-    def _boot_engine(self):
+    def boot(self):
         try:
-            device_to_use = self.device_index
-            if device_to_use is not None:
-                dev_info = sd.query_devices(device_to_use, 'output')
-            else:
-                dev_info = sd.query_devices(kind='output') 
-                
+            if self.stream: self.stream.stop(); self.stream.close()
+            dev_info = sd.query_devices(self.device_index, 'output')
             self.sr = int(dev_info.get('default_samplerate', 48000))
             self.current_device_name = dev_info['name']
-            
-            self.waves = {
-                "accent": self._make_wave("bell", 2000, 0.15),
-                "4th":    self._make_wave("click", 800, 0.08),
-                "8th":    self._make_wave("hihat", 0, 0.05),
-                "16th":   self._make_wave("shaker", 0, 0.04),
-                "trip":   self._make_wave("wood", 1000, 0.06)
-            }
+            self.waves = {"acc": self._make_wave("bell", 2000), "4th": self._make_wave("click", 800), "8th": self._make_wave("hihat"), "16th": self._make_wave("shaker"), "trip": self._make_wave("wood")}
+            self.stream = sd.OutputStream(device=self.device_index, channels=int(dev_info['max_output_channels']), callback=self._cb, latency='low', blocksize=self.buffer_size, samplerate=self.sr)
+            self.stream.start(); self.state["total_samples"] = 0
+            return f"{dev_info['name']} ({self.sr}Hz)"
+        except Exception as e: return f"Error: {str(e)[:15]}"
 
-            self.stream = sd.OutputStream(
-                device=device_to_use,
-                channels=dev_info['max_output_channels'],
-                callback=self._cb, 
-                latency='low', 
-                blocksize=self.buffer_size,
-                samplerate=self.sr
-            )
-            self.stream.start()
-            
-            self.state["total_samples"] = 0
-            self.state["next_tick_sample"] = 0
-            
-            return f"{dev_info['name']} ({self.sr}Hz / {self.buffer_size})"
-        except Exception as e:
-            print(f"Engine Boot Error: {e}")
-            return f"Error: {str(e)[:20]}..."
-
-    def play(self):
-        st = self.state
-        st["zero_offset"] = st["total_samples"]
-        st["next_tick_sample"] = st["total_samples"]
-        st["tick_counter"] = 0
-        st["beat"] = 0
-        st["bar"] = 0
-        st["is_mute"] = False
-        st["active_voices"] = []
-        st["rnd_phase"] = "play"
-        st["rnd_bars_left"] = 3
-        self.is_playing = True
+    def request_start(self):
+        while not self.queue.empty():
+            try: self.queue.get_nowait()
+            except: break
+        self.pending_start = True 
 
     def pause(self):
-        self.is_playing = False
-
-    def cleanup(self):
-        if self.stream: 
-            try: self.stream.stop(); self.stream.close()
-            except: pass
-        self.stream = None
+        self.is_playing = False; self.pending_start = False
+        self.queue.put({"type": "vis", "pos": -1.0, "mute": False})
 
     def _cb(self, outdata, frames, time_info, status):
-        if status: pass 
-
-        outdata.fill(0)
-        st = self.state
-        current_head = st["total_samples"]
-        st["total_samples"] += frames
-        
+        outdata.fill(0); st = self.state; start_s = st["total_samples"]; st["total_samples"] += frames
+        if self.pending_start:
+            st["zero_offset"] = start_s; st["next_tick"] = start_s; st["tick_count"] = 0; st["active_voices"] = []; self.is_playing = True; self.pending_start = False
         if not self.is_playing: return
+        end_s = start_s + frames
+        while st["next_tick"] < end_s:
+            off = int(st["next_tick"] - start_s)
+            if 0 <= off < frames: self._trigger(off)
+            st["next_tick"] += (self.sr * 60.0 / self.params["bpm"]) / 12.0; st["tick_count"] += 1
+        new_voices = []
+        for cur, wav, vol, s_off in st["active_voices"]:
+            wav_cur, b_start = int(cur), int(max(0, s_off)); L = min(frames - b_start, len(wav) - wav_cur)
+            if L > 0:
+                outdata[b_start:b_start+L] += (wav[wav_cur:wav_cur+L] * vol)[:, None]
+                if wav_cur + L < len(wav): new_voices.append([wav_cur+L, wav, vol, s_off-frames])
+            elif s_off > frames: new_voices.append([cur, wav, vol, s_off-frames])
+        st["active_voices"] = new_voices; outdata *= self.params["v_master"]
+        pos = ((end_s - st["zero_offset"]) / self.sr) * (self.params["bpm"] / 60.0) - 0.025 * (self.params["bpm"] / 60.0)
+        self.queue.put({"type": "vis", "pos": max(-1.0, pos), "mute": st["is_mute"]})
 
-        start_sample = current_head
-        end_sample = start_sample + frames
-        
-        while st["next_tick_sample"] < end_sample:
-            offset = int(st["next_tick_sample"] - start_sample)
-            if 0 <= offset < frames: self._trigger_tick(offset)
-            bpm = self.params["bpm"] if self.params["bpm"] > 0 else 120
-            samples_per_tick = (self.sr * 60 / bpm) / 12
-            st["next_tick_sample"] += samples_per_tick
-            st["tick_counter"] += 1
-
-        next_voices = []
-        for cursor, wave, vol, start_offset in st["active_voices"]:
-            wave_cursor = int(cursor)
-            buf_start = int(max(0, start_offset))
-            length = min(frames - buf_start, len(wave) - wave_cursor)
-            if length > 0:
-                outdata[buf_start : buf_start+length] += (wave[wave_cursor : wave_cursor+length] * vol)[:, None]
-                if wave_cursor + length < len(wave):
-                    next_voices.append([wave_cursor + length, wave, vol, start_offset - frames])
-            elif start_offset > frames: 
-                next_voices.append([cursor, wave, vol, start_offset - frames])
-        st["active_voices"] = next_voices
-        outdata *= self.params["vol_master"]
-        
-        bpm = self.params["bpm"] if self.params["bpm"] > 0 else 120
-        musical_sample = end_sample - st["zero_offset"]
-        current_time_sec = musical_sample / self.sr
-        delayed_time_sec = current_time_sec - VISUAL_DELAY
-        current_beat_pos = delayed_time_sec * (bpm / 60.0)
-        try:
-            self.queue.put_nowait({"type": "vis", "beat_pos": current_beat_pos, "mute": st["is_mute"], "bpm": bpm})
-        except: pass
-
-    def _trigger_tick(self, offset):
-        st, p = self.state, self.params
-        ticks_per_bar = 12 * p["beats_per_bar"]
-        if st["tick_counter"] % ticks_per_bar == 0:
-            if p["random_mode"]:
-                st["rnd_bars_left"] -= 1
-                if st["rnd_bars_left"] <= 0:
-                    if st["rnd_phase"] == "play":
-                        st["rnd_phase"] = "mute"; st["rnd_bars_left"] = random.randint(1, 2)
-                    else:
-                        st["rnd_phase"] = "play"; st["rnd_bars_left"] = random.randint(1, 2)
+    def _trigger(self, off):
+        st, p = self.state, self.params; tpb = 12 * p["bpb"]
+        if st["tick_count"] % tpb == 0:
+            if p["rnd"]:
+                st["rnd_left"] -= 1
+                if st["rnd_left"] <= 0: st["rnd_phase"] = "mute" if st["rnd_phase"] == "play" else "play"; st["rnd_left"] = random.randint(1, 2)
                 st["is_mute"] = (st["rnd_phase"] == "mute")
-            else:
-                cycle = p["play_bars"] + p["mute_bars"]
-                current_bar_idx = st["tick_counter"] // ticks_per_bar
-                st["is_mute"] = (current_bar_idx % cycle) >= p["play_bars"]
-
-        bar_count = (st["tick_counter"] // ticks_per_bar) + 1
-        pos_in_bar = st["tick_counter"] % ticks_per_bar
-        beat = (pos_in_bar // 12) + 1
-        tick = pos_in_bar % 12
-        total_beats = st["tick_counter"] // 12
-        is_mute = st["is_mute"]
-        vol_multiplier = p["vol_mute_dim"] if is_mute else 1.0
-        
-        voices = []
-        if vol_multiplier > 0:
+            else: st["is_mute"] = ((st["tick_count"] // tpb) % (p["play"] + p["mute"])) >= p["play"]
+        beat, tick, is_m = ((st["tick_count"] % tpb) // 12) + 1, st["tick_count"] % 12, st["is_mute"]
+        vol_m = p["v_mute_dim"] if is_m else 1.0
+        if vol_m > 0:
+            vs = []
             if tick == 0:
-                if beat == 1 and p["vol_acc"] > 0: voices.append(("accent", p["vol_acc"]))
-                elif p["vol_4th"] > 0: voices.append(("4th", p["vol_4th"]))
-            if tick == 6 and p["vol_8th"] > 0: voices.append(("8th", p["vol_8th"]))
-            if (tick == 3 or tick == 9) and p["vol_16th"] > 0: voices.append(("16th", p["vol_16th"]))
-            if (tick == 4 or tick == 8) and p["vol_trip"] > 0: voices.append(("trip", p["vol_trip"]))
-
-        for n, v in voices: st["active_voices"].append([0, self.waves[n], v * vol_multiplier, offset])
-        
-        r_type, vis_diff = "", 0.0
-        if tick == 0: 
-            r_type = "4th"
-            musical_sample = st["next_tick_sample"] - st["zero_offset"]
-            exact_time_sec = musical_sample / self.sr
-            delayed_time_sec = exact_time_sec - VISUAL_DELAY
-            beat_pos_delayed = delayed_time_sec * (p["bpm"] / 60.0)
-            current_angle = 30.0 * math.cos(beat_pos_delayed * math.pi)
-            vis_diff = 30.0 - abs(current_angle)
-        elif tick == 6: r_type = "8th"
-        
-        if r_type != "":
-            try: self.queue.put_nowait({
-                "type": "event", "ts": time.perf_counter(), "mute": is_mute, "beat": beat, "bar": bar_count, "tick": tick,
-                "bpm": p["bpm"], "r_type": r_type, "total_beats": total_beats, "vis_diff": vis_diff, "rnd_mode": p["random_mode"]
-            })
-            except: pass
+                if beat == 1 and p["v_acc"] > 0: vs.append((self.waves["acc"], p["v_acc"]))
+                elif p["v_4th"] > 0: vs.append((self.waves["4th"], p["v_4th"]))
+            if tick == 6 and p["v_8th"] > 0: vs.append((self.waves["8th"], p["v_8th"]))
+            if (tick == 3 or tick == 9) and p["v_16th"] > 0: vs.append((self.waves["16th"], p["v_16th"]))
+            if (tick == 4 or tick == 8) and p["v_trip"] > 0: vs.append((self.waves["trip"], p["v_trip"]))
+            for w, v in vs: st["active_voices"].append([0, w, v * vol_m, off])
+        if tick == 0:
+            # ★現在の発音サンプル位置（next_tickではなく現在のサンプル）に基づいて角度を計算
+            curr_pos = (st["next_tick"] - st["zero_offset"]) / self.sr
+            angle = 30.0 * math.cos((curr_pos - 0.025) * (p["bpm"]/60.0) * math.pi)
+            self.queue.put({"type": "evt", "ts": time.perf_counter(), "mute": is_m, "beat": beat, "bar": (st["tick_count"] // tpb) + 1, "vis_err": 30.0 - abs(angle)})
 
 # ==========================================
-#  GUI
+#  Setlist Components
 # ==========================================
-class InnerPulseApp:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("InnerPulse (v3.5)")
-        self.root.geometry("500x960")
-        self.root.configure(bg="#222222")
+class SetlistEditor(QDialog):
+    def __init__(self, parent=None, setlist=[]):
+        super().__init__(parent); self.setWindowTitle("Setlist Editor"); self.resize(400, 450)
+        self.setStyleSheet("background: #222; color: #eee;")
+        self.setlist = setlist; self.jump_to_index = -1; layout = QVBoxLayout(self)
+        self.table = QTableWidget(len(setlist), 3); self.table.setHorizontalHeaderLabels(["Song Name", "BPM", "Beats"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setStyleSheet("QTableWidget { background: #333; gridline-color: #444; selection-background-color: #0cf; }")
+        self.table.setSelectionBehavior(QTableWidget.SelectRows); self.table.cellDoubleClicked.connect(self.load_and_close)
+        for i, s in enumerate(setlist):
+            name_item = QTableWidgetItem(s["name"])
+            if i == 0: name_item.setFlags(Qt.ItemIsEnabled)
+            self.table.setItem(i, 0, name_item); self.table.setItem(i, 1, QTableWidgetItem(str(s["bpm"]))); self.table.setItem(i, 2, QTableWidgetItem(str(s["bpb"])))
+        layout.addWidget(self.table)
+        btn_layout = QGridLayout(); btn_add = QPushButton("+ Add Song"); btn_add.clicked.connect(self.add_row)
+        btn_del = QPushButton("- Remove Selected"); btn_del.clicked.connect(self.del_row)
+        btn_save = QPushButton("Save List"); btn_save.clicked.connect(self.save_only)
+        btn_load = QPushButton("LOAD SELECTED"); btn_load.setStyleSheet("background: #0cf; color: #000; font-weight: bold;"); btn_load.clicked.connect(self.load_and_close)
+        btn_layout.addWidget(btn_add, 0, 0); btn_layout.addWidget(btn_del, 0, 1); btn_layout.addWidget(btn_save, 1, 0); btn_layout.addWidget(btn_load, 1, 1); layout.addLayout(btn_layout)
+    def add_row(self):
+        row = self.table.rowCount(); self.table.insertRow(row); self.table.setItem(row, 0, QTableWidgetItem(f"New Song {row}")); self.table.setItem(row, 1, QTableWidgetItem("120")); self.table.setItem(row, 2, QTableWidgetItem("4"))
+    def del_row(self):
+        idx = self.table.currentRow(); 
+        if idx > 0: self.table.removeRow(idx)
+    def save_only(self): self._sync_setlist(); self.accept()
+    def load_and_close(self): self.jump_to_index = self.table.currentRow(); self._sync_setlist(); self.accept()
+    def _sync_setlist(self):
+        new_list = []
+        for i in range(self.table.rowCount()):
+            try: new_list.append({"name": self.table.item(i, 0).text(), "bpm": int(self.table.item(i, 1).text()), "bpb": int(self.table.item(i, 2).text())})
+            except: continue
+        self.setlist[:] = new_list
+
+# ==========================================
+#  Main UI (v1.4.6 Final Stability)
+# ==========================================
+class LogWindow(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(); self.setWindowTitle("InnerPulse Log"); self.resize(450, 350)
+        self.setStyleSheet("background: #111; color: #0f0; font-family: 'Courier New', monospace;")
+        layout = QVBoxLayout(self); self.text = QTextEdit(); self.text.setReadOnly(True); layout.addWidget(self.text); self.parent_app = parent
+    def log(self, msg): self.text.append(msg); self.text.ensureCursorVisible()
+    def toggle(self): self.hide() if self.isVisible() else (self.show(), self.raise_())
+
+class InnerPulseQt(QMainWindow):
+    def __init__(self):
+        super().__init__(); self.setWindowTitle("InnerPulse v1.4.6"); self.setFixedSize(400, 840)
+        self.is_locked = False; self.setlist = []; self.setlist_idx = 0; self.vis_mode = "BAR"
+        self.settings = QSettings("EekohLake", "InnerPulse") 
         
-        self.eng = AudioEngine()
+        self.setStyleSheet("""
+            QMainWindow { background-color: #1e1e1e; }
+            QLabel { color: #ccc; font-family: 'Helvetica Neue', Helvetica; }
+            QFrame#ConfigBox, QFrame#SetlistBox { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }
+            QComboBox { background: #333; color: white; border: 1px solid #444; padding: 3px; border-radius: 4px; font-size: 11px; }
+            QComboBox QAbstractItemView { background-color: #2a2a2a; color: #eee; selection-background-color: #5c6b8a; border: 1px solid #444; }
+            QSpinBox { background: #111; color: #44ff44; padding: 5px; font-size: 16px; border-radius: 5px; font-weight: bold; }
+            QSpinBox:disabled { color: #444; background: #222; }
+            QPushButton#StartBtn { background: #007acc; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; border: 1px solid #005a9e; }
+            QPushButton#StartBtn:disabled { background: #333; color: #666; border: 1px solid #222; }
+            QPushButton#ModeBtn, QPushButton#NavBtn { background: #444; color: #eee; border-radius: 6px; font-size: 11px; font-weight: bold; }
+            QPushButton#LogBtn, QPushButton#EditBtn { background: #5c6b8a; color: #dae0ed; border-radius: 8px; font-weight: bold; font-size: 11px; }
+            QCheckBox { color: #ffcc00; font-weight: bold; font-size: 12px; }
+            QSlider::groove:vertical { background: #111; width: 8px; border-radius: 4px; }
+            QSlider::handle:vertical { background: #999; height: 16px; margin: 0 -3px; border-radius: 3px; }
+        """)
+        self.eng = AudioEngine(); self.log_win = LogWindow(self); self.last_bt, self.diffs = 0, []
+        self.load_setlist()
         
-        self.vars = {
-            "bpm": tk.IntVar(value=120), "bpb": tk.IntVar(value=4),
-            "play": tk.IntVar(value=3), "mute": tk.IntVar(value=1),
-            "random": tk.BooleanVar(value=False),
-            "bar": tk.StringVar(value="Bar: 0"), 
-            "dev": tk.StringVar(value="Initializing..."),
-            "dev_idx": tk.StringVar(),
-            "buf_str": tk.StringVar(value="128 (Fast)")
-        }
-        self.vis_mode = "BAR"
-        self.col = {"bg": "#222222", "fg": "#eeeeee", "on": "#44ff44", "off": "#111111", "dim": "#555", "acc": "#007acc"}
+        central = QWidget(); self.setCentralWidget(central)
+        self.layout = QVBoxLayout(central); self.layout.setContentsMargins(15, 8, 15, 15); self.layout.setSpacing(8)
         
-        self.last_beat_time, self.start_time = 0, 0
-        self.diff_history = []
-        self.log_win, self.log_buffer = None, []
-        self.devices_list = []
-        self.spin_play, self.spin_mute = None, None
-        
-        self.build_ui()
-        self.root.after(100, self.load_config_and_boot)
-        self.update_loop()
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        # Audio Config
+        cfg_box = QFrame(); cfg_box.setObjectName("ConfigBox"); cfg_layout = QVBoxLayout(cfg_box)
+        tk_dev_lbl = QLabel("AUDIO DEVICE / BUFFER (※低いほど高精度)")
+        tk_dev_lbl.setStyleSheet("font-size: 9px; color: #777; font-weight: bold;")
+        self.combo_dev = QComboBox()
+        for i, name in self.eng.get_filtered_devices(): self.combo_dev.addItem(name, i)
+        self.combo_dev.currentIndexChanged.connect(self.change_dev)
+        self.combo_buf = QComboBox(); self.combo_buf.addItems(["64", "128", "256", "512"]); self.combo_buf.setCurrentText("128")
+        self.combo_buf.currentIndexChanged.connect(self.change_buf)
+        cfg_layout.addWidget(tk_dev_lbl); cfg_layout.addWidget(self.combo_dev); cfg_layout.addWidget(self.combo_buf); self.layout.addWidget(cfg_box)
 
-    def on_close(self):
-        self.eng.cleanup()
-        self.root.destroy()
+        # Setlist
+        sl_box = QFrame(); sl_box.setObjectName("SetlistBox"); sl_layout = QVBoxLayout(sl_box)
+        top_sl = QHBoxLayout(); self.btn_prev = QPushButton("<"); self.btn_prev.setObjectName("NavBtn"); self.btn_prev.setFixedSize(30, 30); self.btn_prev.clicked.connect(self.prev_song)
+        self.lbl_song = QLabel("Default"); self.lbl_song.setAlignment(Qt.AlignCenter); self.lbl_song.setStyleSheet("font-weight: bold; color: #0cf; font-size: 14px;")
+        self.btn_next = QPushButton(">"); self.btn_next.setObjectName("NavBtn"); self.btn_next.setFixedSize(30, 30); self.btn_next.clicked.connect(self.next_song)
+        top_sl.addWidget(self.btn_prev); top_sl.addWidget(self.lbl_song); top_sl.addWidget(self.btn_next)
+        self.btn_edit = QPushButton("SETLIST EDITOR (LIST)"); self.btn_edit.setObjectName("EditBtn"); self.btn_edit.setFixedHeight(25); self.btn_edit.clicked.connect(self.open_editor)
+        sl_layout.addLayout(top_sl); sl_layout.addWidget(self.btn_edit); self.layout.addWidget(sl_box)
 
-    def build_ui(self):
-        f_top = tk.LabelFrame(self.root, text="AUDIO SETTINGS", bg=self.col["bg"], fg="#aaa", font=("Helvetica", 8))
-        f_top.pack(fill="x", padx=10, pady=5)
-        
-        tk.Label(f_top, text="Device:", bg=self.col["bg"], fg="#888", font=("Helvetica", 8)).pack(anchor="w", padx=5)
-        self.combo_dev = ttk.Combobox(f_top, textvariable=self.vars["dev_idx"], state="readonly", font=("Helvetica", 9))
-        self.combo_dev.pack(fill="x", padx=5, pady=(0, 5))
-        self.combo_dev.bind("<<ComboboxSelected>>", self.on_device_change)
+        self.btn_mode = QPushButton("Mode: BAR"); self.btn_mode.setObjectName("ModeBtn"); self.btn_mode.setFixedSize(110, 25); self.btn_mode.clicked.connect(self.toggle_mode)
+        self.layout.addWidget(self.btn_mode, 0, Qt.AlignCenter)
 
-        # ★注釈追加
-        tk.Label(f_top, text="Buffer Size (Latency):  ※低いほど精度が上がります", bg=self.col["bg"], fg="#888", font=("Helvetica", 8)).pack(anchor="w", padx=5)
-        self.combo_buf = ttk.Combobox(f_top, textvariable=self.vars["buf_str"], state="readonly", font=("Helvetica", 9))
-        self.combo_buf['values'] = ["512 (Safe)", "256 (Standard)", "128 (Fast)", "64 (Extreme)"]
-        self.combo_buf.pack(fill="x", padx=5, pady=(0, 5))
-        self.combo_buf.bind("<<ComboboxSelected>>", self.on_buffer_change)
+        self.canvas = VisualizerWidget(); self.layout.addWidget(self.canvas)
+        self.lbl_bar = QLabel("Bar: 0"); self.lbl_bar.setAlignment(Qt.AlignCenter); self.lbl_bar.setStyleSheet("font-size: 20px; color: #555; font-weight: bold;"); self.layout.addWidget(self.lbl_bar)
 
-        f_t = tk.Frame(self.root, bg=self.col["bg"]); f_t.pack(pady=(5, 0))
-        self.btn_mode = tk.Button(f_t, text="Mode: BAR", command=self.toggle_mode, bg="#444", fg="#fff", font=("Helvetica", 10), relief="flat", width=12)
-        self.btn_mode.pack()
+        ctrl_grid = QGridLayout()
+        self.sp_bpm_obj = self.create_spin("BPM", 40, 300, 120, "bpm"); self.sp_bpb_obj = self.create_spin("BEATS", 1, 8, 4, "bpb")
+        self.sp_play_obj = self.create_spin("PLAY BARS", 1, 16, 3, "play"); self.sp_mute_obj = self.create_spin("MUTE BARS", 0, 16, 1, "mute")
+        ctrl_grid.addWidget(self.sp_bpm_obj[0], 0, 0); ctrl_grid.addWidget(self.sp_bpm_obj[1], 1, 0); ctrl_grid.addWidget(self.sp_bpb_obj[0], 0, 1); ctrl_grid.addWidget(self.sp_bpb_obj[1], 1, 1)
+        ctrl_grid.addWidget(self.sp_play_obj[0], 2, 0); ctrl_grid.addWidget(self.sp_play_obj[1], 3, 0); ctrl_grid.addWidget(self.sp_mute_obj[0], 2, 1); ctrl_grid.addWidget(self.sp_mute_obj[1], 3, 1)
+        self.layout.addLayout(ctrl_grid)
 
-        self.cv = tk.Canvas(self.root, width=400, height=220, bg=self.col["bg"], bd=0, highlightthickness=0)
-        self.cv.pack(pady=10)
-        
-        cx, cy, l = 200, 180, 150
-        self.arc = self.cv.create_arc(cx-l, cy-l, cx+l, cy+l, start=60, extent=60, style="arc", outline="#444", width=3, state='normal')
-        self.rod = self.cv.create_line(cx, cy, cx, cy-l, fill="#666", width=4, state='normal')
-        self.ball = self.cv.create_oval(cx-20, cy-l-20, cx+20, cy-l+20, fill="#333", outline=self.col["on"], width=4, state='normal')
-        self.dot_l = self.cv.create_oval(30, 60, 130, 160, fill=self.col["off"], outline="#333", width=2, state='hidden')
-        self.dot_r = self.cv.create_oval(270, 60, 370, 160, fill=self.col["off"], outline="#333", width=2, state='hidden')
-        self.txt_beat = self.cv.create_text(200, 110, text="STOP", font=("Impact", 36), fill=self.col["dim"])
-        
-        f_i = tk.Frame(self.root, bg=self.col["bg"]); f_i.pack(fill="x")
-        tk.Label(f_i, textvariable=self.vars["bar"], font=("Helvetica", 16), bg=self.col["bg"], fg="#888").pack()
-        tk.Label(f_i, textvariable=self.vars["dev"], font=("Helvetica", 9), bg=self.col["bg"], fg="#666").pack()
+        self.chk_rnd = QCheckBox("RANDOM TRAINING (R)"); self.chk_rnd.stateChanged.connect(self.sync_random_ui); self.layout.addWidget(self.chk_rnd, 0, Qt.AlignCenter)
 
-        f_c = tk.Frame(self.root, bg=self.col["bg"]); f_c.pack(pady=10, fill="x", padx=20)
-        def spin(row, l, v, vmin, vmax, k):
-            f = tk.Frame(row, bg=self.col["bg"]); f.pack(side="left", fill="x", expand=True, padx=5)
-            tk.Label(f, text=l, bg=self.col["bg"], fg="#ccc", font=("Helvetica", 10)).pack(anchor="w")
-            s = tk.Spinbox(f, from_=vmin, to=vmax, textvariable=v, font=("Helvetica", 14), width=5, justify="center")
-            s.pack(fill="x"); v.trace_add("write", lambda *a: self.safe_update(k, v)); return s
+        mix_layout = QHBoxLayout()
+        for label, k, v, c in [("MST","v_master",0.8,"#fff"), ("ACC","v_acc",0.8,"#fc0"), ("4TH","v_4th",0.5,"#0cf"), ("8TH","v_8th",0.0,"#0cf"), ("16T","v_16th",0.0,"#0cf"), ("TRP","v_trip",0.0,"#f6c"), ("MUTE","v_mute_dim",0.0,"#888")]:
+            v_box = QVBoxLayout(); v_box.setAlignment(Qt.AlignCenter); sld = QSlider(Qt.Vertical); sld.setRange(0, 100); sld.setValue(int(v*100)); sld.setFixedHeight(100); sld.setFocusPolicy(Qt.NoFocus); sld.valueChanged.connect(lambda val, key=k: self.eng.update(key, val/100.0))
+            lbl = QLabel(label); lbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 9px;"); v_box.addWidget(sld); v_box.addWidget(lbl); mix_layout.addLayout(v_box)
+        self.layout.addLayout(mix_layout)
 
-        r1 = tk.Frame(f_c, bg=self.col["bg"]); r1.pack(fill="x", pady=5)
-        spin(r1, "BPM", self.vars["bpm"], 40, 300, "bpm")
-        spin(r1, "Beats", self.vars["bpb"], 1, 7, "beats_per_bar")
-        
-        r2 = tk.Frame(f_c, bg=self.col["bg"]); r2.pack(fill="x", pady=5)
-        self.spin_play = spin(r2, "Play Bars", self.vars["play"], 1, 8, "play_bars")
-        self.spin_mute = spin(r2, "Mute Bars", self.vars["mute"], 1, 8, "mute_bars")
+        btn_layout = QHBoxLayout()
+        self.btn_start = QPushButton("START"); self.btn_start.setObjectName("StartBtn"); self.btn_start.setFixedHeight(60); self.btn_start.clicked.connect(self.toggle)
+        self.btn_log = QPushButton("LOG (L)"); self.btn_log.setObjectName("LogBtn"); self.btn_log.setFixedSize(70, 60); self.btn_log.clicked.connect(self.log_win.toggle)
+        btn_layout.addWidget(self.btn_start); btn_layout.addWidget(self.btn_log); self.layout.addLayout(btn_layout)
 
-        f_rnd = tk.Frame(f_c, bg=self.col["bg"]); f_rnd.pack(fill="x", pady=5)
-        tk.Checkbutton(f_rnd, text="Random Training (Play->2, then Random 1-2)", variable=self.vars["random"], 
-                       bg=self.col["bg"], fg="orange", selectcolor="#444", font=("Helvetica", 10, "bold"),
-                       command=self.toggle_random).pack(side="left", padx=5)
+        QApplication.instance().installEventFilter(self); self.tmr = QTimer(); self.tmr.timeout.connect(self.poll_queue); self.tmr.start(10); self.change_dev(); self.update_song_display()
 
-        f_m = tk.LabelFrame(self.root, text="RHYTHM MIX", bg=self.col["bg"], fg="#aaa", font=("Helvetica", 10, "bold"), bd=1, relief="flat")
-        f_m.pack(pady=10, padx=20, fill="both", expand=True)
-        # ★4TH default 0.5
-        for lbl, k, val, max_v, c in [("MASTER","vol_master",0.8,1.0,"#fff"), ("ACC","vol_acc",0.8,1.0,"#fc0"), ("4TH","vol_4th",0.5,1.0,"#0cf"), 
-                                      ("8TH","vol_8th",0.0,1.0,"#0cf"), ("16TH","vol_16th",0.0,1.0,"#0cf"), ("TRIP","vol_trip",0.0,1.0,"#f6c"),
-                                      ("MUTE","vol_mute_dim",0.0,0.7,"#888")]:
-            f = tk.Frame(f_m, bg=self.col["bg"]); f.pack(side="left", fill="y", expand=True, padx=2, pady=5)
-            tk.Scale(f, from_=max_v, to=0.0, resolution=0.01, orient="vertical", length=150, bg=self.col["bg"], fg=self.col["bg"], troughcolor="#111", width=20, showvalue=0,
-                     command=lambda v, key=k: self.eng.update(key, float(v))).set(val); f.winfo_children()[-1].pack(side="top", pady=5)
-            tk.Label(f, text=lbl, bg=self.col["bg"], fg=c, font=("Helvetica", 8, "bold")).pack(side="bottom")
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.KeyPress and not self.is_locked:
+            key = event.key()
+            if key == Qt.Key_Space: self.toggle(); return True 
+            elif key == Qt.Key_L: self.log_win.toggle(); return True
+            elif key == Qt.Key_M: self.toggle_mode(); return True
+            elif key == Qt.Key_R: self.chk_rnd.setChecked(not self.chk_rnd.isChecked()); return True
+            elif key == Qt.Key_Left: self.prev_song(); return True
+            elif key == Qt.Key_Right: self.next_song(); return True
+        return super().eventFilter(obj, event)
 
-        f_b = tk.Frame(self.root, bg=self.col["bg"]); f_b.pack(pady=20, fill="x", padx=30)
-        self.btn_log = tk.Button(f_b, text="LOG", command=self.open_log, bg="#333", fg="#888", font=("Helvetica", 10, "bold"), relief="flat", width=8)
-        self.btn_log.pack(side="right", fill="y", padx=(10, 0))
-        self.btn = tk.Button(f_b, text="START", command=self.toggle, bg=self.col["acc"], fg="white", font=("Helvetica", 16, "bold"), relief="flat", height=2)
-        self.btn.pack(side="left", fill="both", expand=True)
-
-    def load_config_and_boot(self):
-        self.devices_list = self.eng.get_filtered_devices()
-        dev_names = [label for idx, label in self.devices_list]
-        self.combo_dev['values'] = dev_names
-        target_idx, target_buf = None, 128
-        
-        if os.path.exists(CONFIG_FILE):
-            try:
-                with open(CONFIG_FILE, 'r') as f:
-                    cfg = json.load(f)
-                    saved_idx = cfg.get("device_index", None)
-                    target_buf = cfg.get("buffer_size", 128)
-                    for idx, label in self.devices_list:
-                        if idx == saved_idx: target_idx = saved_idx; break
-            except: pass
-        if target_idx is None and self.devices_list: target_idx = self.devices_list[0][0]
-
-        self.eng.device_index = target_idx
-        self.eng.buffer_size = target_buf
-        for b in ["512", "256", "128", "64"]:
-            if str(target_buf) in b: self.combo_buf.set(b); break
-        self.boot_sequence(target_idx, dev_names)
-
-    def boot_sequence(self, target_idx, dev_names):
-        self.lock_controls()
-        if target_idx is not None:
-            for idx, label in self.devices_list:
-                if idx == target_idx: self.combo_dev.set(label); break
-        elif dev_names: self.combo_dev.set("Auto Selecting...")
-        msg = self.eng._boot_engine()
-        self.vars["dev"].set(msg)
-        self.root.after(1500, self.unlock_controls)
-
-    def on_device_change(self, event):
-        sel = self.combo_dev.get()
-        if not sel: return
-        self.lock_controls()
-        target_idx = None
-        for idx, label in self.devices_list:
-            if label == sel: target_idx = idx; break
-        if target_idx is not None:
-            msg = self.eng.set_device(target_idx)
-            self.vars["dev"].set(msg)
-            self.save_config()
-        self.root.after(1500, self.unlock_controls)
-
-    def on_buffer_change(self, event):
-        sel = self.combo_buf.get()
-        if not sel: return
-        self.lock_controls()
-        buf_size = int(sel.split()[0])
-        msg = self.eng.set_buffer_size(buf_size)
-        self.vars["dev"].set(msg)
-        self.save_config()
-        self.root.after(1000, self.unlock_controls)
-
-    def save_config(self):
-        try:
-            buf_size = int(self.combo_buf.get().split()[0])
-            sel_dev = self.combo_dev.get()
-            target_idx = None
-            for idx, label in self.devices_list:
-                if label == sel_dev: target_idx = idx; break
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump({"device_index": target_idx, "buffer_size": buf_size}, f)
-        except: pass
-
-    def lock_controls(self):
-        self.btn.config(state="disabled", text="WAIT...", bg="#555")
-        self.combo_dev.config(state="disabled")
-        self.combo_buf.config(state="disabled")
-
-    def unlock_controls(self):
-        self.btn.config(state="normal", text="START", bg=self.col["acc"])
-        self.combo_dev.config(state="readonly")
-        self.combo_buf.config(state="readonly")
-
-    def toggle_random(self):
-        is_rnd = self.vars["random"].get()
-        state = "disabled" if is_rnd else "normal"
-        self.spin_play.config(state=state); self.spin_mute.config(state=state)
-        self.eng.update("random_mode", is_rnd)
-        if self.eng.is_playing: self.toggle(); self.toggle()
-
-    def toggle_mode(self):
-        if self.vis_mode == "BAR":
-            self.vis_mode = "LED"; self.btn_mode.config(text="Mode: LED")
-            self.cv.itemconfig(self.arc, state='hidden'); self.cv.itemconfig(self.rod, state='hidden'); self.cv.itemconfig(self.ball, state='hidden')
-            if self.eng.is_playing: self.cv.itemconfig(self.dot_l, state='normal'); self.cv.itemconfig(self.dot_r, state='normal')
-        else:
-            self.vis_mode = "BAR"; self.btn_mode.config(text="Mode: BAR")
-            if self.eng.is_playing: self.cv.itemconfig(self.arc, state='normal'); self.cv.itemconfig(self.rod, state='normal'); self.cv.itemconfig(self.ball, state='normal')
-            self.cv.itemconfig(self.dot_l, state='hidden'); self.cv.itemconfig(self.dot_r, state='hidden')
-
-    def safe_update(self, key, var):
-        try:
-            val = int(var.get())
-            if self.eng.is_playing: self.toggle() 
-            self.eng.update(key, val)
-        except: pass
+    def toggle_mode(self): self.vis_mode = "LED" if self.vis_mode == "BAR" else "BAR"; self.btn_mode.setText(f"Mode: {self.vis_mode}"); self.canvas.set_mode(self.vis_mode)
+    def load_setlist(self):
+        data = self.settings.value("setlist_v2")
+        if data:
+            try: self.setlist = json.loads(data)
+            except: self.setlist = []
+        if not self.setlist or self.setlist[0]["name"] != "Default": self.setlist.insert(0, {"name": "Default", "bpm": 120, "bpb": 4})
+        self.setlist_idx = 0
+    def open_editor(self):
+        dlg = SetlistEditor(self, self.setlist)
+        if dlg.exec():
+            self.settings.setValue("setlist_v2", json.dumps(self.setlist))
+            if dlg.jump_to_index >= 0: self.setlist_idx = dlg.jump_to_index; self.apply_song()
+            else: self.update_song_display()
+    def prev_song(self): self.setlist_idx = (self.setlist_idx - 1) % len(self.setlist); self.apply_song()
+    def next_song(self): self.setlist_idx = (self.setlist_idx + 1) % len(self.setlist); self.apply_song()
+    def apply_song(self): s = self.setlist[self.setlist_idx]; self.sp_bpm_obj[1].setValue(s["bpm"]); self.sp_bpb_obj[1].setValue(s["bpb"]); self.update_song_display()
+    def update_song_display(self): self.lbl_song.setText(f"{self.setlist_idx+1}. {self.setlist[self.setlist_idx]['name']}")
+    def sync_random_ui(self, state): is_rnd = (state == 2); self.eng.update("rnd", is_rnd); self.sp_play_obj[1].setEnabled(not is_rnd); self.sp_mute_obj[1].setEnabled(not is_rnd)
+    def change_dev(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.btn_start.setEnabled(False); self.eng.device_index=self.combo_dev.currentData(); self.eng.boot(); QTimer.singleShot(1500, self.unlock_controls)
+    def change_buf(self): self.is_locked=True; self.btn_start.setText("WAIT..."); self.btn_start.setEnabled(False); self.eng.buffer_size=int(self.combo_buf.currentText()); self.eng.boot(); QTimer.singleShot(1000, self.unlock_controls)
+    def unlock_controls(self): self.is_locked = False; self.btn_start.setText("START"); self.btn_start.setEnabled(True)
 
     def toggle(self):
         if self.eng.is_playing:
-            self.eng.pause(); self.btn.config(text="START", bg=self.col["acc"])
-            self.cv.itemconfig(self.txt_beat, text="STOP", fill=self.col["dim"])
-            self.cv.itemconfig(self.dot_l, state='hidden'); self.cv.itemconfig(self.dot_r, state='hidden')
-            self.cv.itemconfig(self.arc, state='hidden'); self.cv.itemconfig(self.rod, state='hidden'); self.cv.itemconfig(self.ball, state='hidden')
-            elapsed = time.time() - self.start_time
-            if self.diff_history:
-                avg_diff = sum(map(abs, self.diff_history)) / len(self.diff_history)
-                max_diff = max(map(abs, self.diff_history))
-                self.log_print(f"[SUMMARY] Time: {elapsed:.1f}s | Avg Drift: {avg_diff:.2f}ms | Max Drift: {max_diff:.2f}ms")
-                self.log_print("-" * 40)
+            self.eng.pause(); self.btn_start.setText("START"); self.btn_start.setStyleSheet("background: #007acc;")
+            if len(self.diffs) > 1: # 最初の1拍目を除外して精度を計算
+                stats = self.diffs[1:]
+                avg = sum(map(abs, stats))/len(stats)
+                self.log_win.log(f"[SUMMARY] Avg Drift (Stable): {avg:.2f}ms\n" + "-"*35)
         else:
-            self.eng.play(); self.btn.config(text="STOP", bg="#c30")
-            if self.vis_mode == "BAR":
-                self.cv.itemconfig(self.arc, state='normal'); self.cv.itemconfig(self.rod, state='normal'); self.cv.itemconfig(self.ball, state='normal')
-            else:
-                self.cv.itemconfig(self.dot_l, state='normal', fill=self.col["off"]); self.cv.itemconfig(self.dot_r, state='normal', fill=self.col["off"])
-            self.last_beat_time, self.start_time, self.diff_history = 0, time.time(), []
-            v = self.vars
-            mode_str = "RANDOM" if v["random"].get() else f"Play:{v['play'].get()} Mute:{v['mute'].get()}"
-            
-            dev_name = self.eng.current_device_name
-            buf_val = self.eng.buffer_size
-            sr_val = self.eng.sr
-            self.log_print(f"[START] Dev: {dev_name} | Buf: {buf_val} | SR: {sr_val}Hz")
-            self.log_print(f"[START] BPM:{v['bpm'].get()} Beats:{v['bpb'].get()} Mode:{mode_str}")
+            self.canvas.reset_pos(); self.eng.request_start(); self.btn_start.setText("STOP"); self.btn_start.setStyleSheet("background: #c30; border: 1px solid #900;")
+            self.last_bt, self.diffs = 0, []; self.log_win.log(f"[START] BPM:{self.eng.params['bpm']} Dev:{self.eng.current_device_name}")
 
-    def open_log(self):
-        if self.log_win is not None and tk.Toplevel.winfo_exists(self.log_win): self.log_win.lift(); return
-        self.log_win = tk.Toplevel(self.root); self.log_win.title("InnerPulse Log"); self.log_win.geometry("600x400"); self.log_win.configure(bg="#111")
-        f = tk.Frame(self.log_win, bg="#111"); f.pack(fill="both", expand=True)
-        sb = tk.Scrollbar(f); sb.pack(side="right", fill="y")
-        self.log_text = tk.Text(f, bg="#111", fg="#0f0", font=("Consolas", 9), yscrollcommand=sb.set, state="disabled")
-        self.log_text.pack(side="left", fill="both", expand=True); sb.config(command=self.log_text.yview)
-        self.log_text.config(state="normal")
-        for line in self.log_buffer: self.log_text.insert("end", line + "\n")
-        self.log_text.see("end"); self.log_text.config(state="disabled")
+    def create_spin(self, label, min_v, max_v, def_v, key):
+        lbl = QLabel(label); lbl.setAlignment(Qt.AlignCenter); lbl.setStyleSheet("color: #888; font-size: 10px; font-weight: bold;")
+        sp = QSpinBox(); sp.setRange(min_v, max_v); sp.setValue(def_v); sp.setAlignment(Qt.AlignCenter); sp.valueChanged.connect(lambda v: self.eng.update(key, v)); self.eng.update(key, def_v); return lbl, sp
 
-    def log_print(self, msg):
-        print(msg); self.log_buffer.append(msg)
-        if self.log_win is not None and tk.Toplevel.winfo_exists(self.log_win):
-            self.log_text.config(state="normal"); self.log_text.insert("end", msg + "\n"); self.log_text.see("end"); self.log_text.config(state="disabled")
+    def poll_queue(self):
+        while not self.eng.queue.empty():
+            d = self.eng.queue.get()
+            if d["type"] == "vis": self.canvas.update_pos(d["pos"], d["mute"], self.eng.params["bpb"])
+            elif d["type"] == "evt":
+                self.lbl_bar.setText(f"Bar: {d['bar']}")
+                if self.last_bt > 0:
+                    df = (d["ts"] - self.last_bt - (60.0/self.eng.params["bpm"])) * 1000
+                    self.diffs.append(df)
+                    # ★修正：Visは音が鳴った瞬間の角度を表示するように
+                    self.log_win.log(f"[{'MUTE' if d['mute'] else 'PLAY'}] Bar:{d['bar']} Beat:{d['beat']} (Df:{df:+.1f}ms) | Vis:{d['vis_err']:.4f}°")
+                self.last_bt = d["ts"]
 
-    def update_loop(self):
-        try:
-            latest_vis = None
-            while True:
-                d = self.eng.queue.get_nowait()
-                if d["type"] == "warn": self.log_print(f"[WARNING] Dropout: {d['msg']}")
-                elif d["type"] == "event":
-                    tick, beat, mute = d["tick"], d["beat"], d["mute"]
-                    if tick == 0:
-                        self.vars["bar"].set(f"Bar: {d['bar']}")
-                        self.cv.itemconfig(self.txt_beat, text="MUTE" if mute else str(beat), fill=self.col["on"] if not mute else "#f44")
-                        now = d["ts"]; state = "MUTE" if mute else "PLAY"; log_line = f"[{state}] Bar:{d['bar']} Beat:{beat}"
-                        if self.last_beat_time > 0:
-                            interval = now - self.last_beat_time; target = 60.0 / d["bpm"]; diff = (interval - target) * 1000; vis_diff = d.get("vis_diff", 0.0)
-                            log_line += f" | Int:{interval:.4f}s (Df:{diff:+.1f}ms) | Vis:{vis_diff:.4f}°"; self.diff_history.append(diff)
-                        self.last_beat_time = now; self.log_print(log_line)
-                        if self.vis_mode == "LED":
-                            fg = self.col["on"] if not mute else "#f44"; bg = self.col["off"]
-                            if d["total_beats"] % 2 == 0: self.cv.itemconfig(self.dot_l, fill=fg); self.cv.itemconfig(self.dot_r, fill=bg)
-                            else: self.cv.itemconfig(self.dot_l, fill=bg); self.cv.itemconfig(self.dot_r, fill=fg)
-                    elif tick == 6 and self.vis_mode == "LED": self.cv.itemconfig(self.dot_l, fill=self.col["off"]); self.cv.itemconfig(self.dot_r, fill=self.col["off"])
-                elif d["type"] == "vis": latest_vis = d
-        except queue.Empty: pass
-
-        if latest_vis and self.vis_mode == "BAR":
-            d = latest_vis; bpm, mute, beat_pos = d["bpm"], d["mute"], d["beat_pos"]
-            if not self.eng.is_playing:
-                self.cv.itemconfig(self.txt_beat, text="STOP", fill=self.col["dim"]); self.cv.itemconfig(self.ball, outline=self.col["dim"])
-            else:
-                beat_num = int(beat_pos) % self.vars["bpb"].get() + 1; angle = 30 * math.cos(beat_pos * math.pi); col = self.col["on"] if not mute else "#f44"
-                self.cv.itemconfig(self.txt_beat, text="MUTE" if mute else str(beat_num), fill=col); self.cv.itemconfig(self.ball, outline=col)
-                rad = math.radians(angle - 90); cx, cy, l = 200, 180, 150
-                x, y = cx + l * math.cos(rad), cy + l * math.sin(rad)
-                self.cv.coords(self.rod, cx, cy, x, y); self.cv.coords(self.ball, x-20, y-20, x+20, y+20)
-
-        self.root.after(10, self.update_loop)
+class VisualizerWidget(QWidget):
+    def __init__(self): super().__init__(); self.setMinimumHeight(200); self.pos, self.mute, self.bpb, self.mode = -1.0, False, 4, "BAR"
+    def update_pos(self, pos, mute, bpb): self.pos, self.mute, self.bpb = pos, mute, bpb; self.update()
+    def reset_pos(self): self.pos = -1.0; self.update()
+    def set_mode(self, mode): self.mode = mode; self.update()
+    def paintEvent(self, event):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing); cx = self.width()/2; col = QColor("#44ff44") if not self.mute else QColor("#f44")
+        is_active = self.pos >= 0
+        if self.mode == "BAR":
+            cy = 160; angle = 30 * math.cos(self.pos * math.pi) if is_active else 0
+            rad = math.radians(angle - 90); x, y = cx + 120 * math.cos(rad), cy + 120 * math.sin(rad)
+            p.setPen(QPen(QColor("#3d3d3d"), 2)); p.drawArc(cx-120, cy-120, 240, 240, 60*16, 60*16)
+            p.setPen(QPen(QColor("#555"), 3)); p.drawLine(cx, cy, x, y)
+            p.setPen(QPen(col if is_active else QColor("#555"), 4)); p.setBrush(QColor("#222")); p.drawEllipse(QPointF(x, y), 18, 18)
+        else:
+            p.setPen(Qt.NoPen); phase = int(self.pos) % 2 if is_active else -1
+            p.setBrush(col if phase == 0 else QColor("#222")); p.drawEllipse(cx-100, 60, 60, 60)
+            p.setBrush(col if phase == 1 else QColor("#222")); p.drawEllipse(cx+40, 60, 60, 60)
+        p.setPen(col if is_active else QColor("#555")); p.setFont(QFont("Impact", 36))
+        txt = ("MUTE" if self.mute else str(int(self.pos) % self.bpb + 1)) if is_active else "STOP"
+        p.drawText(self.rect(), Qt.AlignCenter, txt)
 
 if __name__ == "__main__":
-    root = tk.Tk(); InnerPulseApp(root); root.mainloop()
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling); app = QApplication(sys.argv); window = InnerPulseQt(); window.show(); sys.exit(app.exec())
