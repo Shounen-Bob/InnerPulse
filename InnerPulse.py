@@ -10,19 +10,31 @@ from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor
 #  Constants & Config
 # ==========================================
 APP_NAME = "InnerPulse"
-APP_VERSION = "v1.7.0"
+APP_VERSION = "v1.7.5"
 JSON_FILENAME = "setlist.json"
-CONFIG_FILENAME = "config.json" # デバイス設定用ファイル
+CONFIG_FILENAME = "config.json"
 DEFAULT_SONG = {"name": "Default", "bpm": 120, "bpb": 4}
 
+# ★UI復元: 矢印が見えるスタイルに戻しました
 MAIN_STYLE = """
     QMainWindow { background-color: #1e1e1e; }
     QLabel { color: #ccc; font-family: 'Helvetica Neue', Helvetica; }
     QFrame#ConfigBox, QFrame#SetlistBox { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }
     QComboBox { background: #333; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px; font-size: 11px; }
     QComboBox QAbstractItemView { background-color: #2a2a2a; color: #eee; selection-background-color: #5c6b8a; border: 1px solid #444; }
-    QSpinBox { background: #111; color: #44ff44; padding: 5px; font-size: 16px; border-radius: 5px; font-weight: bold; }
+    
+    QSpinBox { background: #111; color: #44ff44; padding: 5px; font-size: 16px; border-radius: 5px; font-weight: bold; border: 1px solid #333; }
     QSpinBox:disabled { color: #444; background: #222; }
+    
+    /* 矢印ボタンの視認性確保 */
+    QSpinBox::up-button, QSpinBox::down-button { background: #333; border: 1px solid #444; border-radius: 2px; width: 20px; subcontrol-origin: border; }
+    QSpinBox::up-button { subcontrol-position: top right; }
+    QSpinBox::down-button { subcontrol-position: bottom right; }
+    QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #444; }
+    QSpinBox::up-button:pressed, QSpinBox::down-button:pressed { background: #555; }
+    QSpinBox::up-arrow { width: 0; height: 0; border-left: 4px solid none; border-right: 4px solid none; border-bottom: 5px solid #ccc; }
+    QSpinBox::down-arrow { width: 0; height: 0; border-left: 4px solid none; border-right: 4px solid none; border-top: 5px solid #ccc; }
+
     QPushButton#StartBtn { background: #007acc; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; border: 1px solid #005a9e; }
     QPushButton#StartBtn:disabled { background: #333; color: #666; border: 1px solid #222; }
     QPushButton#ModeBtn, QPushButton#NavBtn { background: #444; color: #eee; border-radius: 6px; font-size: 11px; font-weight: bold; }
@@ -47,7 +59,8 @@ class AudioEngine:
         self.params = {
             "bpm": 120, "bpb": 4, "play": 3, "mute": 1, 
             "v_master": 0.8, "v_acc": 0.8, "v_4th": 0.5, "v_8th": 0.0, 
-            "v_16th": 0.0, "v_trip": 0.0, "v_mute_dim": 0.0, "rnd": False
+            "v_16th": 0.0, "v_trip": 0.0, "v_mute_dim": 0.0, 
+            "rnd": False, "force_play": False
         }
         self.state = {"total_samples": 0, "next_tick": 0, "tick_count": 0, "is_mute": False, "active_voices": [], "zero_offset": 0, "rnd_phase": "play", "rnd_left": 3}
         self.queue = queue.Queue()
@@ -85,13 +98,14 @@ class AudioEngine:
             self.sr = int(dev_info.get('default_samplerate', 48000))
             self.current_device_name = dev_info['name']
             self.waves = {"acc": self._make_wave("bell", 2000), "4th": self._make_wave("click", 800), "8th": self._make_wave("hihat"), "16th": self._make_wave("shaker"), "trip": self._make_wave("wood")}
-            n_channels = min(2, int(dev_info['max_output_channels'])) # 2ch制限
+            n_channels = min(2, int(dev_info['max_output_channels'])) 
             self.stream = sd.OutputStream(
                 device=self.device_index, channels=n_channels, callback=self._cb, latency='low', 
                 blocksize=self.buffer_size, samplerate=self.sr
             )
             self.stream.start(); self.state["total_samples"] = 0
-            return f"{dev_info['name']} ({self.sr}Hz / {n_channels}ch)"
+            # ★ログ用にバッファサイズも含めて返す
+            return f"{dev_info['name']} ({self.sr}Hz / {n_channels}ch / Buf:{self.buffer_size})"
         except Exception as e: return f"Error: {str(e)[:15]}"
 
     def request_start(self):
@@ -134,6 +148,9 @@ class AudioEngine:
                 st["is_mute"] = (st["rnd_phase"] == "mute")
             else: st["is_mute"] = ((st["tick_count"] // tpb) % (p["play"] + p["mute"])) >= p["play"]
         
+        if p["force_play"]:
+            st["is_mute"] = False
+
         beat, tick, is_m = ((st["tick_count"] % tpb) // 12) + 1, st["tick_count"] % 12, st["is_mute"]
         vol_m = p["v_mute_dim"] if is_m else 1.0
         
@@ -251,6 +268,12 @@ class InnerPulseQt(QMainWindow):
 
         QApplication.instance().installEventFilter(self)
         self.tmr = QTimer(); self.tmr.timeout.connect(self.poll_queue); self.tmr.start(10)
+        
+        # ★初期化の順序バグ修正: ここで強制的に変数を同期させる
+        # change_dev() が呼ばれる前に buffer_size を適用しないと初期値128で起動してしまう
+        if "buffer_size" in self.app_config:
+            self.eng.buffer_size = int(self.app_config["buffer_size"])
+        
         self.change_dev() # Initial boot
 
     # --- Config Management ---
@@ -313,7 +336,16 @@ class InnerPulseQt(QMainWindow):
         self.sp_play_obj = self.create_spin("PLAY BARS", 1, 16, 3, "play"); self.sp_mute_obj = self.create_spin("MUTE BARS", 0, 16, 1, "mute")
         ctrl_grid.addWidget(self.sp_play_obj[0], 2, 0); ctrl_grid.addWidget(self.sp_play_obj[1], 3, 0); ctrl_grid.addWidget(self.sp_mute_obj[0], 2, 1); ctrl_grid.addWidget(self.sp_mute_obj[1], 3, 1)
         self.layout.addLayout(ctrl_grid)
-        self.chk_rnd = QCheckBox("RANDOM TRAINING (R)"); self.chk_rnd.stateChanged.connect(self.sync_random_ui); self.layout.addWidget(self.chk_rnd, 0, Qt.AlignCenter)
+        
+        # Checkboxes layout (Random & Mute Off)
+        chk_layout = QHBoxLayout()
+        chk_layout.setAlignment(Qt.AlignCenter)
+        self.chk_rnd = QCheckBox("RANDOM TRAINING (R)"); self.chk_rnd.stateChanged.connect(self.sync_random_ui)
+        self.chk_mute_off = QCheckBox("MUTE OFF (M)"); self.chk_mute_off.stateChanged.connect(lambda state: self.eng.update("force_play", state == 2))
+        chk_layout.addWidget(self.chk_rnd)
+        chk_layout.addSpacing(20) # Spacer
+        chk_layout.addWidget(self.chk_mute_off)
+        self.layout.addLayout(chk_layout)
 
     def setup_mixer_ui(self):
         mix_layout = QHBoxLayout()
@@ -350,7 +382,7 @@ class InnerPulseQt(QMainWindow):
         if event.type() == QEvent.KeyPress and not self.is_locked:
             key = event.key()
             if key == Qt.Key_Space: self.toggle(); return True 
-            elif key == Qt.Key_M: self.toggle_mode(); return True
+            elif key == Qt.Key_M: self.chk_mute_off.setChecked(not self.chk_mute_off.isChecked()); return True # Mute Off Toggle
             elif key == Qt.Key_L: self.log_win.toggle(); return True
             elif key == Qt.Key_R: self.chk_rnd.setChecked(not self.chk_rnd.isChecked()); return True
             elif key == Qt.Key_Left: self.prev_song(); return True
@@ -378,18 +410,20 @@ class InnerPulseQt(QMainWindow):
     def update_song_display(self): self.lbl_song.setText(f"{self.setlist_idx+1}. {self.setlist[self.setlist_idx]['name']}")
     
     def change_dev(self): 
-        self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.device_index=self.combo_dev.currentData(); self.eng.boot(); QTimer.singleShot(1500, self.unlock_controls)
+        self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.device_index=self.combo_dev.currentData(); msg = self.eng.boot(); self.log_win.log(f"[BOOT] {msg}") # Boot時のログ
+        QTimer.singleShot(1500, self.unlock_controls)
         self.app_config["audio_device"] = self.combo_dev.currentText(); self.save_config() # Save on change
 
     def unlock_controls(self): self.is_locked = False; self.btn_start.setText("START"); self.btn_start.setEnabled(True)
     
     def change_buf(self): 
-        self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.buffer_size=int(self.combo_buf.currentText()); self.eng.boot(); QTimer.singleShot(1000, self.unlock_controls)
+        self.is_locked=True; self.btn_start.setText("WAIT..."); self.eng.buffer_size=int(self.combo_buf.currentText()); msg = self.eng.boot(); self.log_win.log(f"[BOOT] {msg}")
+        QTimer.singleShot(1000, self.unlock_controls)
         self.app_config["buffer_size"] = self.combo_buf.currentText(); self.save_config() # Save on change
 
     def toggle(self):
         if self.eng.is_playing: self.eng.pause(); self.btn_start.setText("START"); self.btn_start.setStyleSheet("background: #007acc;")
-        else: self.canvas.reset_pos(); self.eng.request_start(); self.btn_start.setText("STOP"); self.btn_start.setStyleSheet("background: #c30; border: 1px solid #900;"); self.last_bt, self.diffs = 0, []; self.log_win.log(f"[START] BPM:{self.eng.params['bpm']} Dev:{self.eng.current_device_name}")
+        else: self.canvas.reset_pos(); self.eng.request_start(); self.btn_start.setText("STOP"); self.btn_start.setStyleSheet("background: #c30; border: 1px solid #900;"); self.last_bt, self.diffs = 0, []; self.log_win.log(f"[START] BPM:{self.eng.params['bpm']} Dev:{self.eng.current_device_name} Buf:{self.eng.buffer_size}") # 再生時にもバッファ確認
     def create_spin(self, lbl, min_v, max_v, def_v, key):
         l = QLabel(lbl); l.setAlignment(Qt.AlignCenter); s = QSpinBox(); s.setRange(min_v, max_v); s.setValue(def_v); s.valueChanged.connect(lambda v: self.eng.update(key, v)); return l, s
     def sync_random_ui(self, state): is_rnd = (state == 2); self.eng.update("rnd", is_rnd); self.sp_play_obj[1].setEnabled(not is_rnd); self.sp_mute_obj[1].setEnabled(not is_rnd)
