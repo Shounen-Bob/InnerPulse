@@ -43,9 +43,9 @@ final class AppController: NSObject {
                 vm.toggleRandom()
                 return nil
             }
-            // m: Toggle Mute
+            // m: Enable "Mute Off"
             if event.charactersIgnoringModifiers == "m" {
-                vm.toggleMute()
+                vm.enableMuteOff()
                 return nil
             }
             // s: Open Setlist
@@ -54,12 +54,6 @@ final class AppController: NSObject {
                 return nil
             }
             return event
-        }
-
-        // Open main window immediately
-        DispatchQueue.main.async {
-            self.showMainWindow()
-            NSApp.activate(ignoringOtherApps: true)
         }
 
         viewModel.$backgroundOpacity
@@ -81,11 +75,20 @@ final class AppController: NSObject {
         }
     }
 
-    private func showMainWindow() {
+    private func showMainWindow(anchorRect: NSRect? = nil) {
         guard let win = ensureMainWindow() else { return }
         viewModel?.setInterfaceActive(true)
         NSApp.activate(ignoringOtherApps: true)
         win.makeKeyAndOrderFront(nil)
+        _ = positionMainWindowNearStatusItem(win, anchorRect: anchorRect)
+        DispatchQueue.main.async { [weak self, weak win] in
+            guard let self, let win else { return }
+            _ = self.positionMainWindowNearStatusItem(win, anchorRect: anchorRect)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak win] in
+            guard let self, let win else { return }
+            _ = self.positionMainWindowNearStatusItem(win, anchorRect: anchorRect)
+        }
     }
 
     private func installStatusItem() {
@@ -112,8 +115,24 @@ final class AppController: NSObject {
             win.orderOut(nil)
             refreshInterfaceActivity()
         } else {
-            showMainWindow()
+            showMainWindow(anchorRect: statusItemAnchorRect(from: sender))
         }
+    }
+
+    private func statusItemAnchorRect(from sender: Any?) -> NSRect? {
+        if let button = sender as? NSStatusBarButton, let buttonWindow = button.window {
+            let rectInWindow = button.convert(button.bounds, to: nil)
+            return buttonWindow.convertToScreen(rectInWindow)
+        }
+        if let button = statusItem?.button, let buttonWindow = button.window {
+            let rectInWindow = button.convert(button.bounds, to: nil)
+            return buttonWindow.convertToScreen(rectInWindow)
+        }
+        if let event = NSApp.currentEvent, let eventWindow = event.window {
+            let p = event.locationInWindow
+            return eventWindow.convertToScreen(NSRect(x: p.x, y: p.y, width: 1, height: 1))
+        }
+        return nil
     }
 
     private func presentStatusMenu() {
@@ -153,13 +172,13 @@ final class AppController: NSObject {
         // but behaves like a normal window.
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 248, height: 318),
-            styleMask: [.titled, .fullSizeContentView, .closable, .miniaturizable],
+            styleMask: [.titled, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
-        // Hide title bar
-        win.titlebarAppearsTransparent = true
+        win.title = ""
         win.titleVisibility = .hidden
+        win.titlebarAppearsTransparent = true
         win.isOpaque = false
         win.backgroundColor = .clear
         win.hasShadow = true
@@ -175,6 +194,7 @@ final class AppController: NSObject {
         )
         win.contentView = NSHostingView(rootView: root)
         win.center()
+        configureTrafficLightButtons(on: win)
         win.delegate = self
 
         mainWindow = win
@@ -192,13 +212,11 @@ final class AppController: NSObject {
         guard let vm = viewModel else { return }
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 390, height: 660),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         win.title = "InnerPulse Options"
-        win.titlebarAppearsTransparent = true
-        win.titleVisibility = .hidden
         win.isOpaque = false
         win.backgroundColor = NSColor.black.withAlphaComponent(vm.backgroundOpacityFraction)
         win.center()
@@ -209,6 +227,7 @@ final class AppController: NSObject {
                 onOpenSetlist: { [weak self] in self?.openSetlistWindow() },
                 onQuit: { [weak self] in self?.quitApp() }
             ))
+        configureTrafficLightButtons(on: win)
         win.isReleasedWhenClosed = false
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
@@ -236,10 +255,79 @@ final class AppController: NSObject {
             rootView: NavigationStack {
                 SetlistEditorView(viewModel: vm)
             })
+        configureTrafficLightButtons(on: win)
         win.isReleasedWhenClosed = false
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
         setlistWindow = win
+    }
+
+    private func configureTrafficLightButtons(on window: NSWindow) {
+        window.standardWindowButton(.closeButton)?.isHidden = true
+        window.standardWindowButton(.miniaturizeButton)?.isHidden = true
+        window.standardWindowButton(.zoomButton)?.isHidden = true
+    }
+
+    @discardableResult
+    private func positionMainWindowNearStatusItem(_ window: NSWindow, anchorRect: NSRect? = nil) -> Bool {
+        let targetRect: NSRect
+        let screen: NSScreen
+
+        if let anchorRect {
+            targetRect = anchorRect
+            let anchorCenter = NSPoint(x: anchorRect.midX, y: anchorRect.midY)
+            guard let resolvedScreen = screenContaining(anchorCenter) ?? NSScreen.main ?? NSScreen.screens.first
+            else {
+                positionMainWindowFallback(window)
+                return false
+            }
+            screen = resolvedScreen
+        } else if let button = statusItem?.button, let buttonWindow = button.window {
+            let buttonFrameInWindow = button.convert(button.bounds, to: nil)
+            targetRect = buttonWindow.convertToScreen(buttonFrameInWindow)
+            guard let resolvedScreen = buttonWindow.screen ?? NSScreen.main ?? NSScreen.screens.first
+            else {
+                positionMainWindowFallback(window)
+                return false
+            }
+            screen = resolvedScreen
+        } else {
+            positionMainWindowFallback(window)
+            return false
+        }
+
+        let visible = screen.visibleFrame
+        var origin = NSPoint(
+            x: targetRect.midX - (window.frame.width / 2.0),
+            y: targetRect.minY - window.frame.height - 8.0
+        )
+
+        if origin.x < visible.minX + 8.0 {
+            origin.x = visible.minX + 8.0
+        }
+        if origin.x + window.frame.width > visible.maxX - 8.0 {
+            origin.x = visible.maxX - window.frame.width - 8.0
+        }
+        if origin.y < visible.minY + 8.0 {
+            origin.y = visible.minY + 8.0
+        }
+
+        window.setFrameOrigin(origin)
+        return true
+    }
+
+    private func screenContaining(_ point: NSPoint) -> NSScreen? {
+        NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) }
+    }
+
+    private func positionMainWindowFallback(_ window: NSWindow) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let visible = screen.visibleFrame
+        let origin = NSPoint(
+            x: visible.maxX - window.frame.width - 16.0,
+            y: visible.maxY - window.frame.height - 16.0
+        )
+        window.setFrameOrigin(origin)
     }
 
     private func refreshInterfaceActivity() {
@@ -251,6 +339,12 @@ final class AppController: NSObject {
 }
 
 extension AppController: NSWindowDelegate {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        refreshInterfaceActivity()
+        return false
+    }
+
     func windowWillClose(_ notification: Notification) {
         if let win = notification.object as? NSWindow {
             if win == mainWindow {

@@ -285,14 +285,8 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    private var previousVolume: Double?
-    func toggleMute() {
-        if vMaster > 0 {
-            previousVolume = vMaster
-            vMaster = 0.0
-        } else {
-            vMaster = previousVolume ?? 0.8
-        }
+    func enableMuteOff() {
+        forcePlay = true
     }
 
     private func syncTempo() {

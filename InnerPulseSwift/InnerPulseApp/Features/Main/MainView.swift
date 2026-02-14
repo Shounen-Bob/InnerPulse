@@ -190,6 +190,14 @@ struct MainView: View {
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.75))
                     Spacer()
+                    if viewModel.forcePlay {
+                        Text("MUTE OFF")
+                            .font(.system(size: 11, weight: .bold, design: .rounded))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Palette.warning.opacity(0.24), in: Capsule())
+                            .foregroundStyle(Palette.warning)
+                    }
                     Text(viewModel.isMute ? "MUTE" : "PLAY")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .padding(.horizontal, 8)
