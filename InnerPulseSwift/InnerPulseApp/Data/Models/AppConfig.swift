@@ -12,6 +12,8 @@ struct AppConfig: Codable, Equatable {
     var rndPlayMax: Int = 2
     var rndMuteMin: Int = 1
     var rndMuteMax: Int = 2
+    var backgroundOpacity: Int = 18
+    var launchAtLogin: Bool = false
 
     enum CodingKeys: String, CodingKey {
         case audioDevice = "audio_device"
@@ -25,6 +27,8 @@ struct AppConfig: Codable, Equatable {
         case rndPlayMax = "rnd_play_max"
         case rndMuteMin = "rnd_mute_min"
         case rndMuteMax = "rnd_mute_max"
+        case backgroundOpacity = "background_opacity"
+        case launchAtLogin = "launch_at_login"
     }
 
     init() {}
@@ -42,5 +46,8 @@ struct AppConfig: Codable, Equatable {
         rndPlayMax = try c.decodeIfPresent(Int.self, forKey: .rndPlayMax) ?? 2
         rndMuteMin = try c.decodeIfPresent(Int.self, forKey: .rndMuteMin) ?? 1
         rndMuteMax = try c.decodeIfPresent(Int.self, forKey: .rndMuteMax) ?? 2
+        backgroundOpacity = min(
+            100, max(0, try c.decodeIfPresent(Int.self, forKey: .backgroundOpacity) ?? 18))
+        launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
     }
 }

@@ -10,7 +10,7 @@ struct MetronomeState {
 }
 
 struct MetronomeControlState {
-    enum ToneMode: String {
+    enum ToneMode: String, CaseIterable {
         case electronic
         case woody
     }
@@ -72,6 +72,31 @@ final class MetronomeEngine {
 
     private(set) var isPlaying = false
     var onBeat: ((MetronomeState) -> Void)?
+
+    init() {
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleConfigurationChange),
+            name: .AVAudioEngineConfigurationChange, object: engine)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    @objc private func handleConfigurationChange(notification: Notification) {
+        lock.lock()
+        defer { lock.unlock() }
+        toneBufferCache.removeAll()
+        audioGraphConfigured = false
+        // We don't necessarily need to restart immediately,
+        // but clearing cache ensures next start/update uses correct format.
+        // If we represent a "playing" state, we might want to restart the engine if it was running.
+        // For now, let's just clear cache so we don't crash/silence on next usage.
+        if isPlaying {
+            // If playing, we might want to trigger a regeneration if we can.
+            // But usually config change stops the engine.
+        }
+    }
 
     func updateControlState(_ newState: MetronomeControlState) {
         lock.lock()
@@ -179,9 +204,15 @@ final class MetronomeEngine {
             if rndLeft <= 0 {
                 rndPhase = (rndPhase == "play") ? "mute" : "play"
                 if rndPhase == "play" {
-                    rndLeft = Int.random(in: max(1, control.rndPlayMin)...max(max(1, control.rndPlayMin), control.rndPlayMax))
+                    rndLeft = Int.random(
+                        in: max(
+                            1, control.rndPlayMin)...max(
+                                max(1, control.rndPlayMin), control.rndPlayMax))
                 } else {
-                    rndLeft = Int.random(in: max(1, control.rndMuteMin)...max(max(1, control.rndMuteMin), control.rndMuteMax))
+                    rndLeft = Int.random(
+                        in: max(
+                            1, control.rndMuteMin)...max(
+                                max(1, control.rndMuteMin), control.rndMuteMax))
                 }
             }
         }
@@ -194,7 +225,9 @@ final class MetronomeEngine {
         return offset >= control.playBars
     }
 
-    private func triggerTickSounds(tick: Int, beat: Int, muted: Bool, control: MetronomeControlState) {
+    private func triggerTickSounds(
+        tick: Int, beat: Int, muted: Bool, control: MetronomeControlState
+    ) {
         let muteScale = muted ? control.vMuteDim : 1.0
         if muteScale <= 0 { return }
 
@@ -209,28 +242,46 @@ final class MetronomeEngine {
 
         if tick == 0 {
             if (beat == 2 || beat == 4) && control.vBackbeat > 0 {
-                triggers.append(Trigger(player: backbeatPlayer, buffer: backbeatBuffer, volume: control.vBackbeat, allowedDuringMute: control.muteOptBackbeat))
+                triggers.append(
+                    Trigger(
+                        player: backbeatPlayer, buffer: backbeatBuffer, volume: control.vBackbeat,
+                        allowedDuringMute: control.muteOptBackbeat))
             }
 
             if beat == 1 {
                 if control.vAcc > 0 {
-                    triggers.append(Trigger(player: accPlayer, buffer: accentBuffer, volume: control.vAcc, allowedDuringMute: control.muteOptAcc))
+                    triggers.append(
+                        Trigger(
+                            player: accPlayer, buffer: accentBuffer, volume: control.vAcc,
+                            allowedDuringMute: control.muteOptAcc))
                 }
             } else if control.v4th > 0 {
-                triggers.append(Trigger(player: fourthPlayer, buffer: quarterBuffer, volume: control.v4th, allowedDuringMute: control.muteOpt4th))
+                triggers.append(
+                    Trigger(
+                        player: fourthPlayer, buffer: quarterBuffer, volume: control.v4th,
+                        allowedDuringMute: control.muteOpt4th))
             }
         }
 
         if tick == 6, control.v8th > 0 {
-            triggers.append(Trigger(player: eighthPlayer, buffer: eighthBuffer, volume: control.v8th, allowedDuringMute: control.muteOpt8th))
+            triggers.append(
+                Trigger(
+                    player: eighthPlayer, buffer: eighthBuffer, volume: control.v8th,
+                    allowedDuringMute: control.muteOpt8th))
         }
 
-        if (tick == 3 || tick == 9), control.v16th > 0 {
-            triggers.append(Trigger(player: sixteenthPlayer, buffer: sixteenthBuffer, volume: control.v16th, allowedDuringMute: control.muteOpt16th))
+        if tick == 3 || tick == 9, control.v16th > 0 {
+            triggers.append(
+                Trigger(
+                    player: sixteenthPlayer, buffer: sixteenthBuffer, volume: control.v16th,
+                    allowedDuringMute: control.muteOpt16th))
         }
 
-        if (tick == 4 || tick == 8), control.vTrip > 0 {
-            triggers.append(Trigger(player: tripletPlayer, buffer: tripletBuffer, volume: control.vTrip, allowedDuringMute: control.muteOptTrip))
+        if tick == 4 || tick == 8, control.vTrip > 0 {
+            triggers.append(
+                Trigger(
+                    player: tripletPlayer, buffer: tripletBuffer, volume: control.vTrip,
+                    allowedDuringMute: control.muteOptTrip))
         }
 
         for trigger in triggers {
@@ -254,6 +305,10 @@ final class MetronomeEngine {
         }
         audioGraphConfigured = true
 
+        // Pre-generate buffers for all modes
+        generateAndCacheBuffers(mode: .electronic)
+        generateAndCacheBuffers(mode: .woody)
+
         regenerateToneBuffersNoLock(mode: control.toneMode)
     }
 
@@ -261,26 +316,80 @@ final class MetronomeEngine {
         [accPlayer, backbeatPlayer, fourthPlayer, eighthPlayer, sixteenthPlayer, tripletPlayer]
     }
 
+    private struct ToneBuffers {
+        let accent: AVAudioPCMBuffer?
+        let backbeat: AVAudioPCMBuffer?
+        let quarter: AVAudioPCMBuffer?
+        let eighth: AVAudioPCMBuffer?
+        let sixteenth: AVAudioPCMBuffer?
+        let triplet: AVAudioPCMBuffer?
+    }
+
+    private var toneBufferCache: [MetronomeControlState.ToneMode: ToneBuffers] = [:]
+
     private func regenerateToneBuffersNoLock(mode: MetronomeControlState.ToneMode) {
         let format = engine.mainMixerNode.outputFormat(forBus: 0)
-        loadedToneMode = mode
+
+        if let cached = toneBufferCache[mode],
+            let cachedBuf = cached.accent,
+            cachedBuf.format.isEqual(format)
+        {
+
+            accentBuffer = cached.accent
+            backbeatBuffer = cached.backbeat
+            quarterBuffer = cached.quarter
+            eighthBuffer = cached.eighth
+            sixteenthBuffer = cached.sixteenth
+            tripletBuffer = cached.triplet
+            loadedToneMode = mode
+            return
+        }
+
+        // Fallback or format mismatch
+        generateAndCacheBuffers(mode: mode)
+        regenerateToneBuffersNoLock(mode: mode)
+    }
+
+    private func generateAndCacheBuffers(mode: MetronomeControlState.ToneMode) {
+        let format = engine.mainMixerNode.outputFormat(forBus: 0)
+        let buffers: ToneBuffers
 
         switch mode {
         case .electronic:
-            accentBuffer = makeClickBuffer(format: format, frequency: 1600, duration: 0.045, decay: 42, gain: 1.0)
-            backbeatBuffer = makeSnareBuffer(format: format, duration: 0.055, gain: 1.0)
-            quarterBuffer = makeClickBuffer(format: format, frequency: 950, duration: 0.035, decay: 36, gain: 1.0)
-            eighthBuffer = makeClickBuffer(format: format, frequency: 1250, duration: 0.025, decay: 42, gain: 1.0)
-            sixteenthBuffer = makeClickBuffer(format: format, frequency: 760, duration: 0.02, decay: 50, gain: 1.0)
-            tripletBuffer = makeClickBuffer(format: format, frequency: 1080, duration: 0.025, decay: 42, gain: 1.0)
+            buffers = ToneBuffers(
+                accent: makeClickBuffer(
+                    format: format, frequency: 1600, duration: 0.045, decay: 42, gain: 1.0),
+                backbeat: makeSnareBuffer(format: format, duration: 0.055, gain: 1.0),
+                quarter: makeClickBuffer(
+                    format: format, frequency: 950, duration: 0.035, decay: 36, gain: 1.0),
+                eighth: makeClickBuffer(
+                    format: format, frequency: 1250, duration: 0.025, decay: 42, gain: 1.0),
+                sixteenth: makeClickBuffer(
+                    format: format, frequency: 760, duration: 0.02, decay: 50, gain: 1.0),
+                triplet: makeClickBuffer(
+                    format: format, frequency: 1080, duration: 0.025, decay: 42, gain: 1.0)
+            )
         case .woody:
-            accentBuffer = makeClickBuffer(format: format, frequency: 620, duration: 0.03, decay: 95, gain: 1.0, harmonic: 2.1)
-            backbeatBuffer = makeSnareBuffer(format: format, duration: 0.05, gain: 0.85)
-            quarterBuffer = makeClickBuffer(format: format, frequency: 520, duration: 0.025, decay: 110, gain: 0.9, harmonic: 1.95)
-            eighthBuffer = makeClickBuffer(format: format, frequency: 880, duration: 0.02, decay: 120, gain: 0.75, harmonic: 2.25)
-            sixteenthBuffer = makeClickBuffer(format: format, frequency: 760, duration: 0.018, decay: 130, gain: 0.65, harmonic: 2.4)
-            tripletBuffer = makeClickBuffer(format: format, frequency: 700, duration: 0.02, decay: 120, gain: 0.7, harmonic: 2.2)
+            buffers = ToneBuffers(
+                accent: makeClickBuffer(
+                    format: format, frequency: 620, duration: 0.03, decay: 95, gain: 1.0,
+                    harmonic: 2.1),
+                backbeat: makeSnareBuffer(format: format, duration: 0.05, gain: 0.85),
+                quarter: makeClickBuffer(
+                    format: format, frequency: 520, duration: 0.025, decay: 110, gain: 0.9,
+                    harmonic: 1.95),
+                eighth: makeClickBuffer(
+                    format: format, frequency: 880, duration: 0.02, decay: 120, gain: 0.75,
+                    harmonic: 2.25),
+                sixteenth: makeClickBuffer(
+                    format: format, frequency: 760, duration: 0.018, decay: 130, gain: 0.65,
+                    harmonic: 2.4),
+                triplet: makeClickBuffer(
+                    format: format, frequency: 700, duration: 0.02, decay: 120, gain: 0.7,
+                    harmonic: 2.2)
+            )
         }
+        toneBufferCache[mode] = buffers
     }
 
     private func makeClickBuffer(
@@ -314,7 +423,9 @@ final class MetronomeEngine {
         return buffer
     }
 
-    private func makeSnareBuffer(format: AVAudioFormat, duration: Double, gain: Double) -> AVAudioPCMBuffer? {
+    private func makeSnareBuffer(format: AVAudioFormat, duration: Double, gain: Double)
+        -> AVAudioPCMBuffer?
+    {
         let sampleRate = format.sampleRate
         let frameCount = AVAudioFrameCount(max(1, Int(sampleRate * duration)))
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {

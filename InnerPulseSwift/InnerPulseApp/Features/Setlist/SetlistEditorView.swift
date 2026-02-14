@@ -3,7 +3,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct SetlistEditorView: View {
-    @Binding var setlist: [Song]
+    @ObservedObject var viewModel: MainViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var searchText = ""
     @State private var importError: String?
@@ -11,9 +11,10 @@ struct SetlistEditorView: View {
     private var visibleSongIDs: [UUID] {
         let key = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else {
-            return setlist.map { $0.id }
+            return viewModel.setlist.map { $0.id }
         }
-        return setlist
+        return
+            viewModel.setlist
             .filter { $0.name.localizedCaseInsensitiveContains(key) }
             .map { $0.id }
     }
@@ -70,10 +71,13 @@ struct SetlistEditorView: View {
             }
         }
         .padding(.vertical, 6)
-        .alert("JSON Load Failed", isPresented: Binding(
-            get: { importError != nil },
-            set: { if !$0 { importError = nil } }
-        )) {
+        .alert(
+            "JSON Load Failed",
+            isPresented: Binding(
+                get: { importError != nil },
+                set: { if !$0 { importError = nil } }
+            )
+        ) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(importError ?? "")
@@ -82,7 +86,7 @@ struct SetlistEditorView: View {
             ToolbarItemGroup(placement: .automatic) {
                 Button("Load JSON") { loadFromJSON() }
                 Button("Add") {
-                    setlist.append(Song(name: "New Song", bpm: 120, bpb: 4))
+                    viewModel.setlist.append(Song(name: "New Song", bpm: 120, bpb: 4))
                 }
             }
             ToolbarItem(placement: .cancellationAction) {
@@ -93,13 +97,13 @@ struct SetlistEditorView: View {
     }
 
     private func binding(for id: UUID) -> Binding<Song>? {
-        guard let idx = setlist.firstIndex(where: { $0.id == id }) else { return nil }
-        return $setlist[idx]
+        guard let idx = viewModel.setlist.firstIndex(where: { $0.id == id }) else { return nil }
+        return $viewModel.setlist[idx]
     }
 
     private func removeSong(withId id: UUID) {
-        guard let idx = setlist.firstIndex(where: { $0.id == id }) else { return }
-        setlist.remove(at: idx)
+        guard let idx = viewModel.setlist.firstIndex(where: { $0.id == id }) else { return }
+        viewModel.setlist.remove(at: idx)
     }
 
     private func loadFromJSON() {
@@ -117,7 +121,8 @@ struct SetlistEditorView: View {
                 importError = "The selected JSON has no songs."
                 return
             }
-            setlist = loaded
+            viewModel.setlist = loaded
+            searchText = ""  // Clear search to show new songs
         } catch {
             importError = error.localizedDescription
         }

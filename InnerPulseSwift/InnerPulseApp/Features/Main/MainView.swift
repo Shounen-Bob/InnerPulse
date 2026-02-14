@@ -5,8 +5,10 @@ struct MainView: View {
     @ObservedObject var viewModel: MainViewModel
     let showVisualizer: Bool
     let onOpenSetlist: (() -> Void)?
+    let onQuit: (() -> Void)?
     @State private var activeSheet: ActiveSheet?
     @State private var keyMonitor: Any?
+    @State private var showDeleteConfirmation = false
 
     private enum ActiveSheet: Int, Identifiable {
         case muteOptions
@@ -26,23 +28,30 @@ struct MainView: View {
         static let accent = Color.cyan
         static let warning = Color.orange
     }
-    
+
     private var isOptionsMode: Bool { !showVisualizer }
+    private var optionsOpacity: Double { viewModel.backgroundOpacityFraction }
 
     var body: some View {
         ZStack {
             if isOptionsMode {
-                LinearGradient(colors: [Palette.optionsTop, Palette.optionsBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .opacity(0.68)
-                    .ignoresSafeArea()
+                LinearGradient(
+                    colors: [Palette.optionsTop, Palette.optionsBottom], startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .opacity(0.08 + optionsOpacity * 0.92)
+                .ignoresSafeArea()
                 Circle()
-                    .fill(Palette.accent.opacity(0.08))
+                    .fill(Palette.accent.opacity(0.02 + optionsOpacity * 0.09))
                     .frame(width: 320, height: 320)
                     .blur(radius: 24)
                     .offset(x: 120, y: -220)
             } else {
-                LinearGradient(colors: [Palette.bgTop, Palette.bgBottom], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .ignoresSafeArea()
+                LinearGradient(
+                    colors: [Palette.bgTop, Palette.bgBottom], startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
             }
 
             VStack(spacing: isOptionsMode ? 4 : 8) {
@@ -60,11 +69,13 @@ struct MainView: View {
             .padding(.vertical, isOptionsMode ? 2 : 10)
             .background(
                 RoundedRectangle(cornerRadius: isOptionsMode ? 18 : 0, style: .continuous)
-                    .fill(isOptionsMode ? Color.black.opacity(0.14) : Color.clear)
+                    .fill(isOptionsMode ? Color.black.opacity(optionsOpacity * 0.14) : Color.clear)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: isOptionsMode ? 18 : 0, style: .continuous)
-                    .stroke(isOptionsMode ? Color.white.opacity(0.16) : Color.clear, lineWidth: 1)
+                    .stroke(
+                        isOptionsMode ? Color.white.opacity(0.04 + optionsOpacity * 0.16) : Color.clear,
+                        lineWidth: 1)
             )
             .padding(isOptionsMode ? 0 : 0)
         }
@@ -97,15 +108,23 @@ struct MainView: View {
                             Text("Min/Max bars to keep metronome audible in Random mode.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Stepper("Min: \(viewModel.rndPlayMin)", value: $viewModel.rndPlayMin, in: 1...16)
-                            Stepper("Max: \(viewModel.rndPlayMax)", value: $viewModel.rndPlayMax, in: 1...16)
+                            Stepper(
+                                "Min: \(viewModel.rndPlayMin)", value: $viewModel.rndPlayMin,
+                                in: 1...16)
+                            Stepper(
+                                "Max: \(viewModel.rndPlayMax)", value: $viewModel.rndPlayMax,
+                                in: 1...16)
                         }
                         Section("Mute Bars") {
                             Text("Min/Max bars to mute in Random mode.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Stepper("Min: \(viewModel.rndMuteMin)", value: $viewModel.rndMuteMin, in: 1...16)
-                            Stepper("Max: \(viewModel.rndMuteMax)", value: $viewModel.rndMuteMax, in: 1...16)
+                            Stepper(
+                                "Min: \(viewModel.rndMuteMin)", value: $viewModel.rndMuteMin,
+                                in: 1...16)
+                            Stepper(
+                                "Max: \(viewModel.rndMuteMax)", value: $viewModel.rndMuteMax,
+                                in: 1...16)
                         }
                     }
                     .navigationTitle("Random Settings")
@@ -144,7 +163,9 @@ struct MainView: View {
                         Image(systemName: "slider.horizontal.3")
                             .font(.system(size: 13, weight: .heavy))
                             .frame(width: 24, height: 24)
-                            .background(Palette.accent.opacity(0.2), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                            .background(
+                                Palette.accent.opacity(0.2),
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                         VStack(alignment: .leading, spacing: 2) {
                             Text("InnerPulse Options")
                                 .font(.system(size: 14, weight: .bold, design: .rounded))
@@ -173,7 +194,10 @@ struct MainView: View {
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .padding(.horizontal, 8)
                         .padding(.vertical, 3)
-                        .background((viewModel.isMute ? Palette.warning : Palette.accent).opacity(0.2), in: Capsule())
+                        .background(
+                            (viewModel.isMute ? Palette.warning : Palette.accent).opacity(0.2),
+                            in: Capsule()
+                        )
                         .foregroundStyle(viewModel.isMute ? Palette.warning : Palette.accent)
                 }
             }
@@ -231,6 +255,38 @@ struct MainView: View {
                             viewModel.toneMode = .woody
                         }
                     }
+
+                    sectionTitle("System")
+                    VStack(spacing: 7) {
+                        HStack(spacing: 8) {
+                            Text("Background")
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.82))
+                            Slider(
+                                value: Binding(
+                                    get: { Double(viewModel.backgroundOpacity) },
+                                    set: { viewModel.backgroundOpacity = Int($0.rounded()) }
+                                ),
+                                in: 0...100,
+                                step: 1
+                            )
+                            .tint(Palette.accent)
+                            Text("\(viewModel.backgroundOpacity)%")
+                                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.86))
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                        Text("100% = 不透過")
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.55))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Toggle("Mac起動時にInnerPulseを起動", isOn: $viewModel.launchAtLogin)
+                            .toggleStyle(.switch)
+                            .font(.system(size: 12, weight: .semibold, design: .rounded))
+                            .tint(Palette.accent)
+                            .foregroundStyle(.white.opacity(0.92))
+                    }
                 }
 
                 if !isOptionsMode {
@@ -247,14 +303,22 @@ struct MainView: View {
                     sectionTitle("Mixer")
                 }
                 HStack(spacing: 5) {
-                    VerticalSlider(title: "MST", value: $viewModel.vMaster, range: 0...1, labelColor: .white)
-                    VerticalSlider(title: "ACC", value: $viewModel.vAcc, range: 0...1, labelColor: .yellow)
-                    VerticalSlider(title: "BACK", value: $viewModel.vBackbeat, range: 0...1, labelColor: .pink)
-                    VerticalSlider(title: "4TH", value: $viewModel.v4th, range: 0...1, labelColor: .cyan)
-                    VerticalSlider(title: "8TH", value: $viewModel.v8th, range: 0...1, labelColor: .mint)
-                    VerticalSlider(title: "16T", value: $viewModel.v16th, range: 0...1, labelColor: .blue)
-                    VerticalSlider(title: "TRP", value: $viewModel.vTrip, range: 0...1, labelColor: .purple)
-                    VerticalSlider(title: "MUTE", value: $viewModel.vMuteDim, range: 0...1, labelColor: .gray)
+                    VerticalSlider(
+                        title: "MST", value: $viewModel.vMaster, range: 0...1, labelColor: .white)
+                    VerticalSlider(
+                        title: "ACC", value: $viewModel.vAcc, range: 0...1, labelColor: .yellow)
+                    VerticalSlider(
+                        title: "BACK", value: $viewModel.vBackbeat, range: 0...1, labelColor: .pink)
+                    VerticalSlider(
+                        title: "4TH", value: $viewModel.v4th, range: 0...1, labelColor: .cyan)
+                    VerticalSlider(
+                        title: "8TH", value: $viewModel.v8th, range: 0...1, labelColor: .mint)
+                    VerticalSlider(
+                        title: "16T", value: $viewModel.v16th, range: 0...1, labelColor: .blue)
+                    VerticalSlider(
+                        title: "TRP", value: $viewModel.vTrip, range: 0...1, labelColor: .purple)
+                    VerticalSlider(
+                        title: "MUTE", value: $viewModel.vMuteDim, range: 0...1, labelColor: .gray)
                 }
             }
         }
@@ -270,7 +334,10 @@ struct MainView: View {
                 .font(.system(size: 17, weight: .heavy, design: .rounded))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 10)
-                .background(viewModel.isPlaying ? Palette.warning : Palette.accent, in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .background(
+                    viewModel.isPlaying ? Palette.warning : Palette.accent,
+                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                )
                 .foregroundStyle(.black)
             }
 
@@ -281,6 +348,8 @@ struct MainView: View {
                     optionAction("RANDOM", icon: "shuffle") { activeSheet = .randomOptions }
                     optionAction("SETLIST", icon: "music.note.list") { onOpenSetlist?() }
                     optionAction("LOG", icon: "doc.text.magnifyingglass") { activeSheet = .log }
+                    optionAction("DELETE", icon: "trash") { showDeleteConfirmation = true }
+                    optionAction("QUIT", icon: "power") { onQuit?() }
                 }
             } else {
                 HStack(spacing: 6) {
@@ -291,6 +360,15 @@ struct MainView: View {
                 }
             }
         }
+        .alert("Delete Data?", isPresented: $showDeleteConfirmation) {
+            Button("Delete", role: .destructive) {
+                viewModel.resetAppData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "Are you sure you want to delete all settings and setlists? This cannot be undone.")
+        }
     }
 
     private func compactButton(_ systemName: String, action: @escaping () -> Void) -> some View {
@@ -298,7 +376,9 @@ struct MainView: View {
             Image(systemName: systemName)
                 .font(.system(size: 11, weight: .bold))
                 .frame(width: 24, height: 22)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .background(
+                    Color.white.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.white)
@@ -314,7 +394,7 @@ struct MainView: View {
                 LinearGradient(
                     colors: [
                         Color.white.opacity(isOptionsMode ? 0.20 : 0.18),
-                        Color.white.opacity(isOptionsMode ? 0.08 : 0.06)
+                        Color.white.opacity(isOptionsMode ? 0.08 : 0.06),
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -336,7 +416,9 @@ struct MainView: View {
             .shadow(color: .black.opacity(0.30), radius: 4, y: 2)
     }
 
-    private func optionAction(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
+    private func optionAction(_ title: String, icon: String, action: @escaping () -> Void)
+        -> some View
+    {
         Button(action: action) {
             Label(title, systemImage: icon)
                 .font(.system(size: 10, weight: .bold, design: .rounded))
@@ -362,7 +444,9 @@ struct MainView: View {
         .shadow(color: .black.opacity(0.28), radius: 4, y: 2)
     }
 
-    private func toneButton(_ title: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+    private func toneButton(_ title: String, isActive: Bool, action: @escaping () -> Void)
+        -> some View
+    {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -376,7 +460,9 @@ struct MainView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isActive ? Palette.accent.opacity(0.9) : Color.white.opacity(0.18), lineWidth: 1)
+                .stroke(
+                    isActive ? Palette.accent.opacity(0.9) : Color.white.opacity(0.18), lineWidth: 1
+                )
         )
         .foregroundStyle(isActive ? Color.cyan.opacity(0.95) : Color.white.opacity(0.90))
     }
@@ -389,13 +475,22 @@ struct MainView: View {
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
                     .fill(
                         isOptionsMode
-                        ? LinearGradient(colors: [Color.white.opacity(0.06), Color.white.opacity(0.02)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                        : LinearGradient(colors: [Palette.panel, Palette.panel], startPoint: .top, endPoint: .bottom)
+                            ? LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.01 + optionsOpacity * 0.06),
+                                    Color.white.opacity(optionsOpacity * 0.02),
+                                ],
+                                startPoint: .topLeading, endPoint: .bottomTrailing)
+                            : LinearGradient(
+                                colors: [Palette.panel, Palette.panel], startPoint: .top,
+                                endPoint: .bottom)
                     )
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .stroke(isOptionsMode ? Color.white.opacity(0.14) : Palette.panelStroke, lineWidth: 1)
+                    .stroke(
+                        isOptionsMode ? Color.white.opacity(0.03 + optionsOpacity * 0.14) : Palette.panelStroke,
+                        lineWidth: 1)
             )
             .shadow(color: isOptionsMode ? .black.opacity(0.28) : .clear, radius: 5, y: 2)
     }

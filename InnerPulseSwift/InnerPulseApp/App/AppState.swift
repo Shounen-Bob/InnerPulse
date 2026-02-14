@@ -18,26 +18,49 @@ final class AppState: ObservableObject {
     }
 
     func saveConfig() {
-        try? configStore.save(config, to: workingDirectory)
+        let configToSave = self.config
+        let directory = self.workingDirectory
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self else { return }
+            try? self.configStore.save(configToSave, to: directory)
+        }
     }
 
     func saveSetlist() {
-        try? setlistStore.save(setlist, to: workingDirectory)
+        let setlistToSave = self.setlist
+        let directory = self.workingDirectory
+        DispatchQueue.global(qos: .background).async { [weak self] in
+            guard let self else { return }
+            try? self.setlistStore.save(setlistToSave, to: directory)
+        }
+    }
+
+    func resetData() {
+        let directory = self.workingDirectory
+        DispatchQueue.global(qos: .background).async {
+            let fm = FileManager.default
+            try? fm.removeItem(at: directory.appendingPathComponent("config.json"))
+            try? fm.removeItem(at: directory.appendingPathComponent("setlist.json"))
+            // We might want to reload defaults here, or let the next launch handle it.
+            // For now, next launch is sufficient as the user will likely restart.
+        }
     }
 
     private static func resolveWorkingDirectory() -> URL {
         let fm = FileManager.default
-        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
-        let parent = cwd.deletingLastPathComponent()
-        let candidates = [cwd, parent]
+        // Use ~/Library/Application Support/InnerPulseSwift
+        if let appSupport = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let innerPulseDir = appSupport.appendingPathComponent("InnerPulseSwift")
 
-        for dir in candidates {
-            let hasConfig = fm.fileExists(atPath: dir.appendingPathComponent("config.json").path)
-            let hasSetlist = fm.fileExists(atPath: dir.appendingPathComponent("setlist.json").path)
-            if hasConfig || hasSetlist {
-                return dir
+            // Create directory if it doesn't exist
+            if !fm.fileExists(atPath: innerPulseDir.path) {
+                try? fm.createDirectory(at: innerPulseDir, withIntermediateDirectories: true)
             }
+
+            return innerPulseDir
         }
-        return cwd
+
+        // Fallback (should rarely happen on macOS)
+        return URL(fileURLWithPath: fm.currentDirectoryPath)
     }
 }

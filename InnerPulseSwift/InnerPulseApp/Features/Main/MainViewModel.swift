@@ -158,6 +158,18 @@ final class MainViewModel: ObservableObject {
             syncToneOptions()
         }
     }
+    @Published var backgroundOpacity: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncUiOptions()
+        }
+    }
+    @Published var launchAtLogin: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncLaunchOptions()
+        }
+    }
     @Published var isPlaying = false
     @Published var currentBeat = 1
     @Published var currentBar = 1
@@ -175,6 +187,7 @@ final class MainViewModel: ObservableObject {
     private var phaseAnchorTime: TimeInterval?
     private var lastBeatTimestamp: TimeInterval?
     private var cancellables = Set<AnyCancellable>()
+    private var isInterfaceActive = true
 
     init(appState: AppState) {
         self.appState = appState
@@ -203,6 +216,8 @@ final class MainViewModel: ObservableObject {
         self.muteOpt16th = false
         self.muteOptTrip = false
         self.toneMode = ToneMode(rawValue: appState.config.tone) ?? .electronic
+        self.backgroundOpacity = min(100, max(0, appState.config.backgroundOpacity))
+        self.launchAtLogin = appState.config.launchAtLogin
         self.setlist = appState.setlist
         self.setlistIndex = appState.setlistIndex
 
@@ -213,8 +228,11 @@ final class MainViewModel: ObservableObject {
             self.currentBeat = state.beat
             self.currentBar = state.bar
             self.isMute = state.isMute
-            self.appendTimingLog(state: state)
+            if self.isInterfaceActive {
+                self.appendTimingLog(state: state)
+            }
         }
+        LaunchAtLoginManager.setEnabled(launchAtLogin)
         isBootstrapping = false
     }
 
@@ -249,6 +267,34 @@ final class MainViewModel: ObservableObject {
         }
     }
 
+    func toggleRandom() {
+        randomTraining.toggle()
+    }
+
+    var backgroundOpacityFraction: Double {
+        Double(backgroundOpacity) / 100.0
+    }
+
+    func setInterfaceActive(_ active: Bool) {
+        guard isInterfaceActive != active else { return }
+        isInterfaceActive = active
+        if !active {
+            stopVisualClock()
+        } else if isPlaying {
+            startVisualClock(reset: false)
+        }
+    }
+
+    private var previousVolume: Double?
+    func toggleMute() {
+        if vMaster > 0 {
+            previousVolume = vMaster
+            vMaster = 0.0
+        } else {
+            vMaster = previousVolume ?? 0.8
+        }
+    }
+
     private func syncTempo() {
         reanchorVisualPhaseForTempoChange()
         applyToEngine()
@@ -269,6 +315,15 @@ final class MainViewModel: ObservableObject {
 
     private func syncToneOptions() {
         applyToEngine()
+        saveConfig()
+    }
+
+    private func syncUiOptions() {
+        saveConfig()
+    }
+
+    private func syncLaunchOptions() {
+        LaunchAtLoginManager.setEnabled(launchAtLogin)
         saveConfig()
     }
 
@@ -343,6 +398,8 @@ final class MainViewModel: ObservableObject {
         appState.config.rndMuteMin = rndMuteMin
         appState.config.rndMuteMax = rndMuteMax
         appState.config.tone = toneMode.rawValue
+        appState.config.backgroundOpacity = backgroundOpacity
+        appState.config.launchAtLogin = launchAtLogin
         appState.saveConfig()
     }
 
@@ -409,6 +466,16 @@ final class MainViewModel: ObservableObject {
             String(
                 format: "[%@] Bar:%d Beat:%d (Df:%@) | Vis:%.4f°", mode, state.bar, state.beat,
                 dfText, visErr))
+    }
+
+    func resetAppData() {
+        appState.resetData()
+        // Reset local state to defaults immediately for better UX
+        self.setlist = [Song.defaultSong]
+        self.setlistIndex = 0
+        self.bpm = 120
+        self.beatsPerBar = 4
+        // ... (can add more resets if needed, or rely on restart)
     }
 
     private func log(_ message: String) {

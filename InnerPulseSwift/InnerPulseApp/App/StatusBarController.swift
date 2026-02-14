@@ -1,84 +1,130 @@
 import AppKit
+import Combine
 import SwiftUI
 
-final class StatusBarController: NSObject {
-    private var statusItem: NSStatusItem?
+final class AppController: NSObject {
     private weak var viewModel: MainViewModel?
-    private var floatingPanel: NSPanel?
+    private var mainWindow: NSWindow?
     private var optionsWindow: NSWindow?
     private var setlistWindow: NSWindow?
+    private var statusItem: NSStatusItem?
     private var keyMonitor: Any?
+    private var cancellables = Set<AnyCancellable>()
     private var isConfigured = false
 
     func configure(with viewModel: MainViewModel) {
         guard !isConfigured else { return }
         isConfigured = true
         self.viewModel = viewModel
-        NSApplication.shared.setActivationPolicy(.accessory)
 
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        // Menu bar resident app (no Dock icon).
+        NSApplication.shared.setActivationPolicy(.accessory)
+        installStatusItem()
+
+        // Local monitor (when app is active/focused)
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, let vm = self.viewModel else { return event }
+            // Space: Toggle Playback
+            if event.keyCode == 49 {
+                vm.togglePlayback()
+                return nil
+            }
+            // Left/Right arrows: Setlist navigation
+            if event.keyCode == 123 {
+                vm.previousSong()
+                return nil
+            }
+            if event.keyCode == 124 {
+                vm.nextSong()
+                return nil
+            }
+            // r: Toggle Random
+            if event.charactersIgnoringModifiers == "r" {
+                vm.toggleRandom()
+                return nil
+            }
+            // m: Toggle Mute
+            if event.charactersIgnoringModifiers == "m" {
+                vm.toggleMute()
+                return nil
+            }
+            // s: Open Setlist
+            if event.charactersIgnoringModifiers == "s" {
+                self.openSetlistWindow()
+                return nil
+            }
+            return event
+        }
+
+        // Open main window immediately
+        DispatchQueue.main.async {
+            self.showMainWindow()
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
+        viewModel.$backgroundOpacity
+            .receive(on: RunLoop.main)
+            .sink { [weak self, weak viewModel] _ in
+                guard let self, let vm = viewModel else { return }
+                self.optionsWindow?.backgroundColor = NSColor.black.withAlphaComponent(
+                    vm.backgroundOpacityFraction)
+            }
+            .store(in: &cancellables)
+    }
+
+    // handleGlobalKey is removed as global key monitoring for a floating panel is no longer relevant
+    // in a standard app window setup. Local key events will handle interactions when the app is active.
+
+    deinit {
+        if let m = keyMonitor {
+            NSEvent.removeMonitor(m)
+        }
+    }
+
+    private func showMainWindow() {
+        guard let win = ensureMainWindow() else { return }
+        viewModel?.setInterfaceActive(true)
+        NSApp.activate(ignoringOtherApps: true)
+        win.makeKeyAndOrderFront(nil)
+    }
+
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = item.button {
-            button.image = NSImage(systemSymbolName: "metronome", accessibilityDescription: "InnerPulse")
+            button.image = NSImage(systemSymbolName: "metronome.fill", accessibilityDescription: "InnerPulse")
             button.imagePosition = .imageOnly
             button.target = self
             button.action = #selector(handleStatusItemClick(_:))
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-        statusItem = item
 
-        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self, let vm = self.viewModel else { return event }
-            if event.keyCode == 49 { // space
-                vm.togglePlayback()
-                return nil
-            }
-            return event
-        }
+        statusItem = item
     }
 
     @objc
-    private func handleStatusItemClick(_ sender: NSStatusBarButton) {
-        guard let event = NSApp.currentEvent else {
-            togglePendulumWindow()
+    private func handleStatusItemClick(_ sender: Any?) {
+        if NSApp.currentEvent?.type == .rightMouseUp {
+            presentStatusMenu()
             return
         }
 
-        if event.type == .rightMouseUp || event.modifierFlags.contains(.option) {
-            presentMenu()
+        if let win = mainWindow, win.isVisible {
+            win.orderOut(nil)
+            refreshInterfaceActivity()
         } else {
-            togglePendulumWindow()
+            showMainWindow()
         }
     }
 
-    private func presentMenu() {
+    private func presentStatusMenu() {
         let menu = NSMenu()
-
-        let toggleItem = NSMenuItem(
-            title: (floatingPanel?.isVisible == true) ? "Hide Pendulum" : "Show Pendulum",
-            action: #selector(menuTogglePendulum),
-            keyEquivalent: ""
-        )
+        let visible = mainWindow?.isVisible == true
+        let toggleTitle = visible ? "Hide" : "Open"
+        let toggleItem = NSMenuItem(title: toggleTitle, action: #selector(toggleFromMenu), keyEquivalent: "")
         toggleItem.target = self
         menu.addItem(toggleItem)
 
-        let playTitle = (viewModel?.isPlaying == true) ? "Stop (Space)" : "Start (Space)"
-        let playItem = NSMenuItem(title: playTitle, action: #selector(menuTogglePlayback), keyEquivalent: " ")
-        playItem.target = self
-        menu.addItem(playItem)
-
-        menu.addItem(.separator())
-
-        let optItem = NSMenuItem(title: "Options", action: #selector(menuOpenOptions), keyEquivalent: ",")
-        optItem.target = self
-        menu.addItem(optItem)
-
-        let setlistItem = NSMenuItem(title: "Setlist", action: #selector(menuOpenSetlist), keyEquivalent: "s")
-        setlistItem.target = self
-        menu.addItem(setlistItem)
-
-        menu.addItem(.separator())
-
-        let quitItem = NSMenuItem(title: "Quit InnerPulse", action: #selector(menuQuit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
 
@@ -87,68 +133,56 @@ final class StatusBarController: NSObject {
         statusItem?.menu = nil
     }
 
-    @objc private func menuTogglePendulum() { togglePendulumWindow() }
+    @objc
+    private func toggleFromMenu() {
+        handleStatusItemClick(nil)
+    }
 
-    @objc private func menuTogglePlayback() { viewModel?.togglePlayback() }
-
-    @objc private func menuOpenOptions() { openOptionsWindow() }
-    @objc private func menuOpenSetlist() { openSetlistWindow() }
-
-    @objc private func menuQuit() {
+    @objc
+    private func quitApp() {
         NSApp.terminate(nil)
     }
 
-    private func togglePendulumWindow() {
-        guard let panel = ensureFloatingPanel() else { return }
-
-        if panel.isVisible {
-            panel.orderOut(nil)
-        } else {
-            placePanelNearTopRightIfNeeded(panel)
-            panel.orderFrontRegardless()
-        }
-    }
-
-    private func ensureFloatingPanel() -> NSPanel? {
-        if let panel = floatingPanel {
-            return panel
+    private func ensureMainWindow() -> NSWindow? {
+        if let win = mainWindow {
+            return win
         }
         guard let vm = viewModel else { return nil }
 
-        let panel = NSPanel(
+        // Create a custom window that looks like the previous panel
+        // but behaves like a normal window.
+        let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 248, height: 318),
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: [.titled, .fullSizeContentView, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        panel.isOpaque = false
-        panel.backgroundColor = .clear
-        panel.level = .floating
-        panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = true
-        panel.hidesOnDeactivate = false
+        // Hide title bar
+        win.titlebarAppearsTransparent = true
+        win.titleVisibility = .hidden
+        win.isOpaque = false
+        win.backgroundColor = .clear
+        win.hasShadow = true
+        win.isMovableByWindowBackground = true
+        // Remove .fullScreenAuxiliary for standard app behavior in Mission Control?
+        // Let's stick to standard behavior.
+        win.collectionBehavior = [.managed]
 
         let root = FloatingPendulumView(
             viewModel: vm,
-            onOptions: { [weak self] in self?.openOptionsWindow() }
+            onOptions: { [weak self] in self?.openOptionsWindow() },
+            onOpenSetlist: { [weak self] in self?.openSetlistWindow() }
         )
-        panel.contentView = NSHostingView(rootView: root)
+        win.contentView = NSHostingView(rootView: root)
+        win.center()
+        win.delegate = self
 
-        floatingPanel = panel
-        return panel
-    }
-
-    private func placePanelNearTopRightIfNeeded(_ panel: NSPanel) {
-        guard panel.frame.origin == .zero else { return }
-        guard let screen = NSScreen.main else { return }
-        let vf = screen.visibleFrame
-        let x = vf.maxX - panel.frame.width - 18
-        let y = vf.maxY - panel.frame.height - 28
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        mainWindow = win
+        return win
     }
 
     private func openOptionsWindow() {
+        viewModel?.setInterfaceActive(true)
         NSApp.activate(ignoringOtherApps: true)
 
         if let win = optionsWindow {
@@ -166,13 +200,15 @@ final class StatusBarController: NSObject {
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isOpaque = false
-        win.backgroundColor = NSColor.black.withAlphaComponent(0.18)
+        win.backgroundColor = NSColor.black.withAlphaComponent(vm.backgroundOpacityFraction)
         win.center()
-        win.contentView = NSHostingView(rootView: MainView(
-            viewModel: vm,
-            showVisualizer: false,
-            onOpenSetlist: { [weak self] in self?.openSetlistWindow() }
-        ))
+        win.contentView = NSHostingView(
+            rootView: MainView(
+                viewModel: vm,
+                showVisualizer: false,
+                onOpenSetlist: { [weak self] in self?.openSetlistWindow() },
+                onQuit: { [weak self] in self?.quitApp() }
+            ))
         win.isReleasedWhenClosed = false
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
@@ -180,6 +216,7 @@ final class StatusBarController: NSObject {
     }
 
     private func openSetlistWindow() {
+        viewModel?.setInterfaceActive(true)
         NSApp.activate(ignoringOtherApps: true)
 
         if let win = setlistWindow {
@@ -195,26 +232,38 @@ final class StatusBarController: NSObject {
         )
         win.title = "Setlist"
         win.center()
-        win.contentView = NSHostingView(rootView: NavigationStack {
-            SetlistEditorView(setlist: Binding(
-                get: { vm.setlist },
-                set: { vm.setlist = $0 }
-            ))
-        })
+        win.contentView = NSHostingView(
+            rootView: NavigationStack {
+                SetlistEditorView(viewModel: vm)
+            })
         win.isReleasedWhenClosed = false
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
         setlistWindow = win
     }
+
+    private func refreshInterfaceActivity() {
+        let visibleMain = mainWindow?.isVisible == true
+        let visibleOptions = optionsWindow?.isVisible == true
+        let visibleSetlist = setlistWindow?.isVisible == true
+        viewModel?.setInterfaceActive(visibleMain || visibleOptions || visibleSetlist)
+    }
 }
 
-extension StatusBarController: NSWindowDelegate {
+extension AppController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
-        if let win = notification.object as? NSWindow, win == optionsWindow {
-            optionsWindow = nil
-        }
-        if let win = notification.object as? NSWindow, win == setlistWindow {
-            setlistWindow = nil
+        if let win = notification.object as? NSWindow {
+            if win == mainWindow {
+                // Keep app resident when the main window is closed.
+                mainWindow = nil
+            }
+            if win == optionsWindow {
+                optionsWindow = nil
+            }
+            if win == setlistWindow {
+                setlistWindow = nil
+            }
+            refreshInterfaceActivity()
         }
     }
 }
@@ -222,16 +271,18 @@ extension StatusBarController: NSWindowDelegate {
 private struct FloatingPendulumView: View {
     @ObservedObject var viewModel: MainViewModel
     let onOptions: () -> Void
+    let onOpenSetlist: () -> Void
     @State private var bpmText = ""
-    private let panelOpacityScale = 1.2
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color.black.opacity(0.18 * panelOpacityScale))
+                .fill(Color.black.opacity(viewModel.backgroundOpacityFraction))
                 .overlay(
                     RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .stroke(Color.white.opacity(0.28 * panelOpacityScale), lineWidth: 1)
+                        .stroke(
+                            Color.white.opacity(0.12 + viewModel.backgroundOpacityFraction * 0.4),
+                            lineWidth: 1)
                 )
 
             VStack(spacing: 10) {
@@ -240,23 +291,34 @@ private struct FloatingPendulumView: View {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 10, weight: .bold))
                             .frame(width: 20, height: 20)
-                            .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .background(
+                                Color.white.opacity(0.14),
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white)
 
-                    Text(viewModel.currentSongTitle)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity)
-                        .foregroundStyle(.white.opacity(0.9))
+                    Button(action: {
+                        onOpenSetlist()
+                    }) {
+                        Text(viewModel.currentSongTitle)
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .frame(maxWidth: .infinity)
+                            .foregroundStyle(.white.opacity(0.9))
+                            .contentShape(Rectangle())  // Make entire text area clickable
+                    }
+                    .buttonStyle(.plain)
 
                     Button(action: { viewModel.nextSong() }) {
+
                         Image(systemName: "chevron.right")
                             .font(.system(size: 10, weight: .bold))
                             .frame(width: 20, height: 20)
-                            .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .background(
+                                Color.white.opacity(0.14),
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.white)
@@ -281,6 +343,12 @@ private struct FloatingPendulumView: View {
                     Text("\(viewModel.bpm) BPM / \(viewModel.beatsPerBar)/4")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.72))
+                    if viewModel.randomTraining {
+                        subtleStateText("RND ON")
+                    }
+                    if viewModel.forcePlay {
+                        subtleStateText("MUTE OFF")
+                    }
                     Spacer()
                 }
                 .padding(.horizontal, 10)
@@ -310,7 +378,9 @@ private struct FloatingPendulumView: View {
                         }
                         .buttonStyle(.plain)
                         .frame(width: 20, height: 20)
-                        .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(
+                            Color.white.opacity(0.14),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
 
                         TextField("", text: $bpmText)
                             .textFieldStyle(.plain)
@@ -337,7 +407,9 @@ private struct FloatingPendulumView: View {
                         }
                         .buttonStyle(.plain)
                         .frame(width: 20, height: 20)
-                        .background(Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .background(
+                            Color.white.opacity(0.14),
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                     }
                     .frame(maxWidth: .infinity)
                 }
@@ -354,5 +426,11 @@ private struct FloatingPendulumView: View {
             bpmText = "\(value)"
         }
         .help("Click: Start/Stop | Space: Start/Stop | Gear: Open Options")
+    }
+
+    private func subtleStateText(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 9, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color.white.opacity(0.62))
     }
 }

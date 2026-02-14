@@ -3,15 +3,15 @@ import SwiftUI
 @main
 struct InnerPulseApp: App {
     @StateObject private var viewModel: MainViewModel
-    private let statusBarController: StatusBarController
+    private let appController: AppController
 
     init() {
         let state = AppState()
         let vm = MainViewModel(appState: state)
         _viewModel = StateObject(wrappedValue: vm)
-        let controller = StatusBarController()
+        let controller = AppController()
         controller.configure(with: vm)
-        self.statusBarController = controller
+        self.appController = controller
     }
 
     var body: some Scene {
