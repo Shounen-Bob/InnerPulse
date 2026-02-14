@@ -285,8 +285,8 @@ final class MainViewModel: ObservableObject {
         }
     }
 
-    func enableMuteOff() {
-        forcePlay = true
+    func toggleMuteOff() {
+        forcePlay.toggle()
     }
 
     private func syncTempo() {

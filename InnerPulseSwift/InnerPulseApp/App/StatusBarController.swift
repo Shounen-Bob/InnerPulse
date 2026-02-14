@@ -43,9 +43,9 @@ final class AppController: NSObject {
                 vm.toggleRandom()
                 return nil
             }
-            // m: Enable "Mute Off"
+            // m: Toggle "Mute Off"
             if event.charactersIgnoringModifiers == "m" {
-                vm.enableMuteOff()
+                vm.toggleMuteOff()
                 return nil
             }
             // s: Open Setlist
@@ -189,7 +189,7 @@ final class AppController: NSObject {
 
         let root = FloatingPendulumView(
             viewModel: vm,
-            onOptions: { [weak self] in self?.openOptionsWindow() },
+            onOptions: { [weak self] in self?.toggleOptionsWindow() },
             onOpenSetlist: { [weak self] in self?.openSetlistWindow() }
         )
         win.contentView = NSHostingView(rootView: root)
@@ -199,6 +199,21 @@ final class AppController: NSObject {
 
         mainWindow = win
         return win
+    }
+
+    private func toggleOptionsWindow() {
+        if let win = optionsWindow, win.isVisible {
+            win.orderOut(nil)
+            refreshInterfaceActivity()
+            return
+        }
+        openOptionsWindow()
+    }
+
+    private func closeOptionsWindow() {
+        guard let win = optionsWindow else { return }
+        win.orderOut(nil)
+        refreshInterfaceActivity()
     }
 
     private func openOptionsWindow() {
@@ -225,6 +240,7 @@ final class AppController: NSObject {
                 viewModel: vm,
                 showVisualizer: false,
                 onOpenSetlist: { [weak self] in self?.openSetlistWindow() },
+                onClose: { [weak self] in self?.closeOptionsWindow() },
                 onQuit: { [weak self] in self?.quitApp() }
             ))
         configureTrafficLightButtons(on: win)
@@ -437,13 +453,12 @@ private struct FloatingPendulumView: View {
                     Text("\(viewModel.bpm) BPM / \(viewModel.beatsPerBar)/4")
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.72))
-                    if viewModel.randomTraining {
-                        subtleStateText("RND ON")
-                    }
-                    if viewModel.forcePlay {
-                        subtleStateText("MUTE OFF")
-                    }
                     Spacer()
+                    HStack(spacing: 4) {
+                        subtleStateText("RND ON", visible: viewModel.randomTraining)
+                        subtleStateText("MUTE OFF", visible: viewModel.forcePlay)
+                    }
+                    .frame(width: 100, alignment: .trailing)
                 }
                 .padding(.horizontal, 10)
 
@@ -522,9 +537,12 @@ private struct FloatingPendulumView: View {
         .help("Click: Start/Stop | Space: Start/Stop | Gear: Open Options")
     }
 
-    private func subtleStateText(_ title: String) -> some View {
+    private func subtleStateText(_ title: String, visible: Bool) -> some View {
         Text(title)
             .font(.system(size: 9, weight: .semibold, design: .rounded))
             .foregroundStyle(Color.white.opacity(0.62))
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .opacity(visible ? 1 : 0)
     }
 }
