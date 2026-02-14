@@ -5,62 +5,153 @@ from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QSlider, QFrame, QCheckBox, QTextEdit, QDialog, QTableWidget,
                              QTableWidgetItem, QHeaderView, QAbstractItemView,
                              QLineEdit, QAbstractSpinBox, QMenu)
-from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor, QAction, QActionGroup
+from PySide6.QtGui import QPainter, QPen, QColor, QFont, QCursor, QAction, QActionGroup, QRadialGradient
 
 # ==========================================
 #  Constants & Config
 # ==========================================
 APP_NAME = "InnerPulse"
-APP_VERSION = "v1.7.8"
+APP_VERSION = "v1.8.0"
 JSON_FILENAME = "setlist.json"
 CONFIG_FILENAME = "config.json"
 DEFAULT_SONG = {"name": "Default", "bpm": 120, "bpb": 4}
 
 MAIN_STYLE = """
-    QMainWindow { background-color: #1e1e1e; }
-    QLabel { color: #ccc; font-family: 'Helvetica Neue', Helvetica; }
-    QFrame#ConfigBox, QFrame#SetlistBox { border: 1px solid #3d3d3d; border-radius: 8px; background: #262626; }
-    QComboBox { background: #333; color: white; border: 1px solid #444; padding: 4px; border-radius: 4px; font-size: 11px; }
-    QComboBox QAbstractItemView { background-color: #2a2a2a; color: #eee; selection-background-color: #5c6b8a; border: 1px solid #444; }
+    QMainWindow { background-color: #181818; }
+    QLabel { color: #e0e0e0; font-family: 'Segoe UI', 'San Francisco', 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 13px; }
+    
+    QFrame#ConfigBox, QFrame#SetlistBox { 
+        background: #252526; 
+        border: 1px solid #333; 
+        border-radius: 8px; 
+    }
+    
+    /* Global PushButton Style - Premium Professional Look */
+    QPushButton {
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #424242, stop:1 #333333);
+        color: #f0f0f0;
+        border: 1px solid #222;
+        border-top: 1px solid #555;
+        border-radius: 4px;
+        padding: 5px 16px;
+        font-weight: 600;
+        font-size: 11px;
+    }
+    QPushButton:hover { 
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a4a4a, stop:1 #3b3b3b);
+        border-color: #444;
+    }
+    QPushButton:pressed { 
+        background-color: #2b2b2b; 
+        border: 1px solid #111;
+        padding-top: 6px;
+        padding-bottom: 4px;
+    }
+    QPushButton:disabled { background-color: #252526; color: #555; border-color: #333; }
 
-    QSpinBox { background: #111; color: #44ff44; padding: 5px; font-size: 16px; border-radius: 5px; font-weight: bold; border: 1px solid #333; }
-    QSpinBox:disabled { color: #444; background: #222; }
+    /* Start Button - Deep Gradient & Glow */
+    QPushButton#StartBtn { 
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00a4ef, stop:1 #007acc);
+        color: white; 
+        font-size: 16px; 
+        border: 1px solid #005a9e;
+        border-top: 1px solid #00c3ff;
+        border-radius: 6px;
+    }
+    QPushButton#StartBtn:hover { 
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1eb1f5, stop:1 #008be6);
+    }
+    QPushButton#StartBtn:pressed { 
+        background-color: #006bb3; 
+        border: none;
+    }
+    
+    /* Secondary Buttons (Mode, Nav, MuteOpts) */
+    QPushButton#ModeBtn, QPushButton#NavBtn { 
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3c3c3c, stop:1 #2d2d30);
+        border: 1px solid #1a1a1a;
+        border-top: 1px solid #4a4a4a;
+        color: #ccc;
+    }
+    QPushButton#NavBtn { padding: 0; }
+    QPushButton#ModeBtn:hover, QPushButton#NavBtn:hover {
+        background-color: #444;
+        color: white;
+    }
 
-    QSpinBox::up-button, QSpinBox::down-button { background: #333; border: 1px solid #444; border-radius: 2px; width: 20px; subcontrol-origin: border; }
-    QSpinBox::up-button { subcontrol-position: top right; }
-    QSpinBox::down-button { subcontrol-position: bottom right; }
-    QSpinBox::up-button:hover, QSpinBox::down-button:hover { background: #444; }
-    QSpinBox::up-button:pressed, QSpinBox::down-button:pressed { background: #555; }
-    QSpinBox::up-arrow { width: 0; height: 0; border-left: 4px solid none; border-right: 4px solid none; border-bottom: 5px solid #ccc; }
-    QSpinBox::down-arrow { width: 0; height: 0; border-left: 4px solid none; border-right: 4px solid none; border-top: 5px solid #ccc; }
+    QPushButton#EditBtn, QPushButton#LogBtn {
+        background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #4a4a4d, stop:1 #3a3a3d);
+        border: 1px solid #2a2a2d;
+        border-top: 1px solid #5a5a5d;
+        color: #dae0ed;
+    }
+    QPushButton#EditBtn:hover { background-color: #4e4e52; }
 
-    QPushButton#StartBtn { background: #007acc; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; border: 1px solid #005a9e; }
-    QPushButton#StartBtn:disabled { background: #333; color: #666; border: 1px solid #222; }
-    QPushButton#ModeBtn, QPushButton#NavBtn { background: #444; color: #eee; border-radius: 6px; font-size: 11px; font-weight: bold; }
-    QPushButton#LogBtn, QPushButton#EditBtn { background: #5c6b8a; color: #dae0ed; border-radius: 8px; font-weight: bold; font-size: 11px; }
-    QCheckBox { color: #ffcc00; font-weight: bold; font-size: 12px; }
-    QSlider::groove:vertical { background: #111; width: 8px; border-radius: 4px; }
-    QSlider::handle:vertical { background: #999; height: 16px; margin: 0 -3px; border-radius: 3px; }
+    /* ComboBox */
+    QComboBox { 
+        background: #252526; 
+        color: #e0e0e0; 
+        border: 1px solid #3e3e42; 
+        padding: 3px 8px; 
+        border-radius: 4px;
+        font-size: 11px;
+    }
+    QComboBox::drop-down { border: none; width: 20px; }
+    QComboBox::down-arrow { image: none; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid #888; margin-right: 8px; }
+    QComboBox QAbstractItemView { background-color: #252526; color: #e0e0e0; selection-background-color: #007acc; border: 1px solid #3e3e42; outline: none; }
+
+    /* SpinBox */
+    QSpinBox { 
+        background: #1e1e1e; 
+        color: #4CAF50; 
+        padding: 4px; 
+        font-size: 14px; 
+        border-radius: 4px; 
+        font-weight: bold; 
+        border: 1px solid #333; 
+    }
+    QSpinBox:disabled { color: #555; background: #252526; }
+    QSpinBox::up-button, QSpinBox::down-button { width: 0; height: 0; } /* Hide buttons */
+
+    /* CheckBox */
+    QCheckBox { color: #ccc; font-weight: 600; font-size: 11px; spacing: 4px; }
+    QCheckBox::indicator { width: 16px; height: 16px; border-radius: 3px; border: 1px solid #444; background: #1e1e1e; }
+    QCheckBox::indicator:checked { background: #007acc; border-color: #007acc; }
+
+    /* Slider - Pro Audio Look */
+    QSlider::groove:vertical { 
+        background: #222; 
+        width: 8px; 
+        border-radius: 4px; 
+        border: 1px solid #333;
+    }
+    QSlider::handle:vertical { 
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #666, stop:1 #444);
+        height: 12px; 
+        margin: 0 -4px; 
+        border-radius: 2px; 
+        border: 1px solid #222;
+        border-top: 1px solid #777;
+    }
+    QSlider::handle:vertical:hover { background: #777; }
+    QSlider::sub-page:vertical { background: #111; border-radius: 4px; }
 """
 
-LIGHT_STYLE = """
-    QMainWindow { background-color: #f0f0f0; }
-    QLabel { color: #333; font-family: 'Helvetica Neue', Helvetica; }
-    QFrame#ConfigBox, QFrame#SetlistBox { border: 1px solid #ccc; border-radius: 8px; background: #ffffff; }
-    QPushButton { background: #e0e0e0; color: #333; border: 1px solid #bbb; border-radius: 4px; padding: 4px; font-weight: bold; }
-    QPushButton:hover { background: #d0d0d0; border: 1px solid #999; }
-    QPushButton:pressed { background: #c0c0c0; }
-    QComboBox { background: #fff; color: #333; border: 1px solid #ccc; border-radius: 4px; padding: 2px 10px; }
-    QComboBox::drop-down { border: none; }
-    QSpinBox { background: #fff; color: #333; border: 1px solid #ccc; border-radius: 4px; padding: 2px; }
-    QSpinBox::up-button, QSpinBox::down-button { background: #eee; width: 16px; border-radius: 2px; }
-    QSpinBox::up-arrow { width: 0; height: 0; border-left: 4px solid none; border-right: 4px solid none; border-bottom: 5px solid #333; }
-    QSpinBox::down-arrow { width: 0; height: 0; border-left: 4px solid none; border-right: 4px solid none; border-top: 5px solid #333; }
-    QPushButton#StartBtn { background: #007acc; color: white; font-size: 18px; font-weight: bold; border-radius: 8px; border: 1px solid #005a9e; }
-    QPushButton#StartBtn:disabled { background: #ddd; color: #999; border: 1px solid #ccc; }
-    QCheckBox { color: #d60; font-weight: bold; font-size: 12px; }
-    QSlider::groove:vertical { background: #ddd; width: 8px; border-radius: 4px; }
-    QSlider::handle:vertical { background: #666; height: 16px; margin: 0 -3px; border-radius: 3px; }
+SETLIST_STYLE = """
+    QDialog { background: #222; color: #eee; }
+    QTableWidget { background: #333; color: #eee; gridline-color: #444; font-size: 13px; }
+    QTableWidget::item { padding: 4px; }
+    QTableWidget::item:selected { background-color: #007acc; color: white; border: 1px solid #44ff44; }
+    QHeaderView::section { background-color: #444; color: #ddd; border: 1px solid #555; font-size: 12px; font-weight: bold; padding: 5px; }
+    QTableWidget QLineEdit {
+        background-color: #ffffff;
+        color: #000000;
+        font-weight: bold;
+        border: 2px solid #00aaff;
+        selection-background-color: #007acc;
+        selection-color: white;
+    }
+    QPushButton { font-size: 12px; padding: 6px; }
 """
 
 # ==========================================
@@ -287,22 +378,7 @@ class SetlistEditor(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Setlist Editor")
         self.resize(400, 450)
-        self.setStyleSheet("""
-            QDialog { background: #222; color: #eee; }
-            QTableWidget { background: #333; color: #eee; gridline-color: #444; font-size: 13px; }
-            QTableWidget::item { padding: 4px; }
-            QTableWidget::item:selected { background-color: #007acc; color: white; border: 1px solid #44ff44; }
-            QHeaderView::section { background-color: #444; color: #ddd; border: 1px solid #555; font-size: 12px; font-weight: bold; padding: 5px; }
-            QTableWidget QLineEdit {
-                background-color: #ffffff;
-                color: #000000;
-                font-weight: bold;
-                border: 2px solid #00aaff;
-                selection-background-color: #007acc;
-                selection-color: white;
-            }
-            QPushButton { font-size: 12px; padding: 6px; }
-        """)
+        self.setStyleSheet(SETLIST_STYLE)
         self.setlist = setlist
         self.jump_to_index = -1
         layout = QVBoxLayout(self)
@@ -536,54 +612,101 @@ class VisualizerWidget(QWidget):
 
     def reset_pos(self): self.pos = -1.0; self.update()
     def set_mode(self, mode): self.mode = mode; self.update()
-    def set_theme(self, is_dark): self.dark_mode = is_dark; self.update()
     def paintEvent(self, event):
-        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing); cx = self.width()/2; col = QColor("#44ff44") if not self.mute else QColor("#f44")
-        bg_inactive = QColor("#222") if self.dark_mode else QColor("#ddd")
-        pen_inactive = QColor("#555") if self.dark_mode else QColor("#999")
-        arc_col = QColor("#3d3d3d") if self.dark_mode else QColor("#ccc")
-        is_active = self.pos >= 0
-        if self.mode == "BAR":
-            cy = 160; angle = 30 * math.cos(self.pos * math.pi) if is_active else 0
-            rad = math.radians(angle - 90); x, y = cx + 120 * math.cos(rad), cy + 120 * math.sin(rad)
-            p.setPen(QPen(arc_col, 2)); p.drawArc(cx-120, cy-120, 240, 240, 60*16, 60*16)
-            p.setPen(QPen(pen_inactive, 3)); p.drawLine(cx, cy, x, y)
-            p.setPen(QPen(col if is_active else pen_inactive, 4)); p.setBrush(bg_inactive); p.drawEllipse(QPointF(x, y), 18, 18)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        
+        # Colors & Gradients
+        if self.dark_mode:
+            bg_inactive = QColor("#2d2d30")
+            pen_inactive = QColor("#444")
+            arc_col = QColor("#333")
+            text_col = QColor("#888")
+            active_col = QColor("#007acc")
+            mute_col = QColor("#d32f2f")
+            glow_alpha = 100
         else:
-            # LED Mode: 4 dots in a row, one lights up per quarter note (beat)
+            bg_inactive = QColor("#e0e0e0")
+            pen_inactive = QColor("#ccc")
+            arc_col = QColor("#ddd")
+            text_col = QColor("#666")
+            active_col = QColor("#007acc")
+            mute_col = QColor("#f44336")
+            glow_alpha = 80
+
+        col = active_col if not self.mute else mute_col
+        cx, cy = self.width() / 2, 160
+        is_active = self.pos >= 0
+
+        p.setPen(Qt.NoPen)
+
+        if self.mode == "BAR":
+            # Draw Arc/Track
+            p.setPen(QPen(arc_col, 5, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(int(cx-120), int(cy-120), 240, 240, 60*16, 60*16)
+            
+            angle = 30 * math.cos(self.pos * math.pi) if is_active else 0
+            rad = math.radians(angle - 90)
+            x, y = cx + 120 * math.cos(rad), cy + 120 * math.sin(rad)
+            
+            # Draw Pendulum Line
             if is_active:
-                p.setPen(Qt.NoPen)
-                current_beat = int(self.pos) % self.bpb  # 0-3 for 4/4 time
-                dot_size = 40
-                dot_spacing = 70
-                # Start position to center the dots
-                start_x = cx - (dot_spacing * 1.5)
-                dot_y = 50
+                p.setPen(QPen(col, 3, Qt.SolidLine, Qt.RoundCap))
+                p.drawLine(QPointF(cx, cy), QPointF(x, y))
 
-                # Draw 4 dots
-                for i in range(4):
-                    dot_x = start_x + (i * dot_spacing)
-                    if i == current_beat:
-                        p.setBrush(col)  # Active dot
-                    else:
-                        p.setBrush(bg_inactive)  # Inactive dot
-                    p.drawEllipse(int(dot_x - dot_size/2), int(dot_y - dot_size/2), dot_size, dot_size)
+            # Draw Pivot
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor("#555"))
+            p.drawEllipse(QPointF(cx, cy), 4, 4)
+
+            # Draw Ball (with glow)
+            if is_active:
+                # Glow
+                glow_grad = QRadialGradient(x, y, 30)
+                glow_grad.setColorAt(0, QColor(col.red(), col.green(), col.blue(), glow_alpha))
+                glow_grad.setColorAt(1, Qt.transparent)
+                p.setBrush(glow_grad)
+                p.drawEllipse(QPointF(x, y), 30, 30)
+
+                # Solid Core
+                p.setBrush(col)
+                p.drawEllipse(QPointF(x, y), 12, 12)
             else:
-                # When stopped, show all dots as inactive
-                p.setPen(Qt.NoPen)
                 p.setBrush(bg_inactive)
-                dot_size = 40
-                dot_spacing = 70
-                start_x = cx - (dot_spacing * 1.5)
-                dot_y = 50
-                for i in range(4):
-                    dot_x = start_x + (i * dot_spacing)
-                    p.drawEllipse(int(dot_x - dot_size/2), int(dot_y - dot_size/2), dot_size, dot_size)
+                p.drawEllipse(QPointF(x, y), 12, 12)
 
-        p.setPen(col if is_active else pen_inactive); p.setFont(QFont("Impact", 36))
+        else:
+            # LED Mode: 4 dots
+            p.setPen(Qt.NoPen)
+            current_beat = int(self.pos) % self.bpb if is_active else -1
+            dot_size = 36
+            dot_spacing = 60
+            start_x = cx - ((dot_spacing * (4-1)) / 2)
+            dot_y = 100
+
+            for i in range(4):
+                dot_x = start_x + (i * dot_spacing)
+                
+                if i == current_beat:
+                    # Active Glow
+                    glow_grad = QRadialGradient(dot_x, dot_y, dot_size)
+                    glow_grad.setColorAt(0, QColor(col.red(), col.green(), col.blue(), glow_alpha))
+                    glow_grad.setColorAt(1, Qt.transparent)
+                    p.setBrush(glow_grad)
+                    p.drawEllipse(QPointF(dot_x, dot_y), dot_size*1.5, dot_size*1.5)
+                    
+                    p.setBrush(col)
+                    p.drawEllipse(QPointF(dot_x, dot_y), dot_size/2, dot_size/2)
+                else:
+                    p.setBrush(bg_inactive)
+                    p.drawEllipse(QPointF(dot_x, dot_y), dot_size/3, dot_size/3)
+
+        # Draw Status Text
+        p.setFont(QFont("Segoe UI", 32, QFont.Bold))
         txt = ("MUTE" if self.mute else str(int(self.pos) % self.bpb + 1)) if is_active else "STOP"
-        # Position text lower to avoid overlap with LED dots
-        text_rect = QRect(0, 100 if self.mode == "LED" else 0, self.width(), self.height() - 100 if self.mode == "LED" else self.height())
+        
+        text_rect = QRect(0, int(cy + 40), int(self.width()), 60)
+        p.setPen(col if is_active else text_col)
         p.drawText(text_rect, Qt.AlignCenter, txt)
 
 # ==========================================
@@ -593,7 +716,7 @@ class InnerPulseQt(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(f"{APP_NAME} {APP_VERSION}")
-        self.setFixedSize(400, 840)
+        self.setFixedSize(380, 820)
         self.is_locked = False
         self.setlist = []
         self.setlist_idx = 0
@@ -619,8 +742,8 @@ class InnerPulseQt(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         self.layout = QVBoxLayout(central)
-        self.layout.setContentsMargins(15, 8, 15, 15)
-        self.layout.setSpacing(8)
+        self.layout.setContentsMargins(10, 5, 10, 10)
+        self.layout.setSpacing(4)
 
         self.setup_audio_ui()
         self.setup_setlist_ui()
@@ -629,7 +752,6 @@ class InnerPulseQt(QMainWindow):
         self.setup_mixer_ui()
         self.setup_footer_ui()
 
-        self.apply_theme()
         self.setup_menu_bar()
         self.setup_tool_bar()
 
@@ -641,11 +763,17 @@ class InnerPulseQt(QMainWindow):
         if "buffer_size" in self.app_config:
             self.eng.buffer_size = int(self.app_config["buffer_size"])
 
+        # Initial Tone set from config
+        saved_tone = self.app_config.get("tone", "electronic")
+        self.eng.set_tone_mode(saved_tone)
+        if hasattr(self, 'btn_tone'):
+            self.btn_tone.setText("♪ Wood" if saved_tone == "woody" else "♪ Elec")
+
         self.change_dev() # Initial boot
 
     # --- Config Management ---
     def load_config(self):
-        self.app_config = {"audio_device": "", "buffer_size": "128", "theme": "dark"}
+        self.app_config = {"audio_device": "", "buffer_size": "128", "tone": "electronic"}
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, 'r', encoding='utf-8') as f:
@@ -670,7 +798,9 @@ class InnerPulseQt(QMainWindow):
         cfg_box = QFrame()
         cfg_box.setObjectName("ConfigBox")
         cfg_layout = QVBoxLayout(cfg_box)
-        tk_dev_lbl = QLabel("AUDIO DEVICE / BUFFER (ASIO/WASAPI優先)")
+        cfg_layout.setContentsMargins(8, 6, 8, 6)
+        cfg_layout.setSpacing(4)
+        tk_dev_lbl = QLabel("AUDIO DEVICE / BUFFER")
         tk_dev_lbl.setStyleSheet("font-size: 9px; color: #777; font-weight: bold;")
 
         self.combo_dev = QComboBox()
@@ -687,33 +817,43 @@ class InnerPulseQt(QMainWindow):
         self.combo_buf.setCurrentText(self.app_config.get("buffer_size", "128"))
         self.combo_buf.currentIndexChanged.connect(self.change_buf)
 
+        cfg_row = QHBoxLayout()
+        cfg_row.setContentsMargins(0, 0, 0, 0)
+        cfg_row.setSpacing(4)
+        cfg_row.addWidget(self.combo_dev, 7)
+        cfg_row.addWidget(self.combo_buf, 3)
+        
         cfg_layout.addWidget(tk_dev_lbl)
-        cfg_layout.addWidget(self.combo_dev)
-        cfg_layout.addWidget(self.combo_buf)
+        cfg_layout.addLayout(cfg_row)
         self.layout.addWidget(cfg_box)
 
     def setup_setlist_ui(self):
         sl_box = QFrame()
         sl_box.setObjectName("SetlistBox")
         sl_layout = QVBoxLayout(sl_box)
+        sl_layout.setContentsMargins(8, 6, 8, 6)
+        sl_layout.setSpacing(4)
+        
         top_sl = QHBoxLayout()
+        top_sl.setSpacing(4)
         self.btn_prev = QPushButton("<")
         self.btn_prev.setObjectName("NavBtn")
-        self.btn_prev.setFixedSize(30, 30)
+        self.btn_prev.setFixedSize(24, 24)
         self.btn_prev.clicked.connect(self.prev_song)
         self.lbl_song = QLabel("Default")
         self.lbl_song.setAlignment(Qt.AlignCenter)
-        self.lbl_song.setStyleSheet("font-weight: bold; color: #0cf; font-size: 14px")
+        self.lbl_song.setStyleSheet("font-weight: bold; color: #0cf; font-size: 13px")
         self.btn_next = QPushButton(">")
         self.btn_next.setObjectName("NavBtn")
-        self.btn_next.setFixedSize(30, 30)
+        self.btn_next.setFixedSize(24, 24)
         self.btn_next.clicked.connect(self.next_song)
         top_sl.addWidget(self.btn_prev)
         top_sl.addWidget(self.lbl_song)
         top_sl.addWidget(self.btn_next)
+        
         self.btn_edit = QPushButton("SETLIST EDITOR (LIST)")
         self.btn_edit.setObjectName("EditBtn")
-        self.btn_edit.setFixedHeight(25)
+        self.btn_edit.setFixedHeight(22)
         self.btn_edit.clicked.connect(self.open_editor)
         sl_layout.addLayout(top_sl)
         sl_layout.addWidget(self.btn_edit)
@@ -723,28 +863,27 @@ class InnerPulseQt(QMainWindow):
         # Mode and Mute Options buttons in a row
         mode_layout = QHBoxLayout()
         mode_layout.setAlignment(Qt.AlignCenter)
+        mode_layout.setSpacing(6)
 
         self.btn_mode = QPushButton("Mode: BAR")
         self.btn_mode.setObjectName("ModeBtn")
-        self.btn_mode.setFixedSize(110, 25)
+        self.btn_mode.setFixedSize(100, 22)
         self.btn_mode.clicked.connect(self.toggle_mode)
 
         self.btn_mute_opts = QPushButton("MUTE OPT")
         self.btn_mute_opts.setObjectName("ModeBtn")
-        self.btn_mute_opts.setFixedSize(90, 25)
+        self.btn_mute_opts.setFixedSize(90, 22)
         self.btn_mute_opts.clicked.connect(self.open_mute_options)
         self.btn_mute_opts.setStyleSheet("QPushButton { background: #5c6b8a; color: #dae0ed; font-size: 10px; }")
 
         self.btn_tone = QPushButton("♪ Elec")
         self.btn_tone.setObjectName("ModeBtn")
-        self.btn_tone.setFixedSize(70, 25)
+        self.btn_tone.setFixedSize(72, 22)
         self.btn_tone.clicked.connect(self.toggle_tone)
         self.btn_tone.setStyleSheet("QPushButton { background: #4a5568; color: #cbd5e0; font-size: 10px; }")
 
         mode_layout.addWidget(self.btn_mode)
-        mode_layout.addSpacing(10)
         mode_layout.addWidget(self.btn_mute_opts)
-        mode_layout.addSpacing(10)
         mode_layout.addWidget(self.btn_tone)
         self.layout.addLayout(mode_layout)
 
@@ -757,6 +896,8 @@ class InnerPulseQt(QMainWindow):
 
     def setup_controls_ui(self):
         ctrl_grid = QGridLayout()
+        ctrl_grid.setHorizontalSpacing(6)
+        ctrl_grid.setVerticalSpacing(4)
         self.sp_bpm_obj = self.create_spin("BPM", 40, 300, 120, "bpm")
         self.sp_bpb_obj = self.create_spin("BEATS", 1, 8, 4, "bpb")
         ctrl_grid.addWidget(self.sp_bpm_obj[0], 0, 0)
@@ -784,7 +925,9 @@ class InnerPulseQt(QMainWindow):
         self.layout.addLayout(chk_layout)
 
     def setup_mixer_ui(self):
+        self.layout.addSpacing(15)
         mix_layout = QHBoxLayout()
+        mix_layout.setSpacing(2)
         controls = [
             ("MST", "v_master", 0.8, "#fff"),
             ("ACC", "v_acc", 0.8, "#fc0"),
@@ -798,14 +941,15 @@ class InnerPulseQt(QMainWindow):
         for label, k, v, c in controls:
             v_box = QVBoxLayout()
             v_box.setAlignment(Qt.AlignCenter)
+            v_box.setSpacing(0)
             sld = QSlider(Qt.Vertical)
             sld.setRange(0, 100)
             sld.setValue(int(v*100))
-            sld.setFixedHeight(100)
+            sld.setFixedHeight(120)
             sld.setFocusPolicy(Qt.NoFocus)
             sld.valueChanged.connect(lambda val, key=k: self.eng.update(key, val/100.0))
             lbl = QLabel(label)
-            lbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 9px;")
+            lbl.setStyleSheet(f"color: {c}; font-weight: bold; font-size: 8px;")
             v_box.addWidget(sld)
             v_box.addWidget(lbl)
             mix_layout.addLayout(v_box)
@@ -815,7 +959,7 @@ class InnerPulseQt(QMainWindow):
         btn_layout = QHBoxLayout()
         self.btn_start = QPushButton("START")
         self.btn_start.setObjectName("StartBtn")
-        self.btn_start.setFixedHeight(60)
+        self.btn_start.setFixedHeight(45)
         self.btn_start.clicked.connect(self.toggle)
         btn_layout.addWidget(self.btn_start)
         self.layout.addLayout(btn_layout)
@@ -887,16 +1031,6 @@ class InnerPulseQt(QMainWindow):
         import_act = QAction("📂 Import JSON", self)
         import_act.triggered.connect(self.import_setlist)
         toolbar.addAction(import_act)
-        
-        toolbar.addSeparator()
-        
-        theme_act = QAction("🌓 Toggle Theme", self)
-        theme_act.triggered.connect(self.toggle_theme_shortcut)
-        toolbar.addAction(theme_act)
-
-    def toggle_theme_shortcut(self):
-        current = self.app_config.get("theme", "dark")
-        self.set_theme("light" if current == "dark" else "dark")
 
     def setup_menu_bar(self):
         self.log_win.log("[DEBUG] Setting up Menu Bar...")
@@ -911,26 +1045,7 @@ class InnerPulseQt(QMainWindow):
         
         # View Menu
         view_menu = menubar.addMenu("&View")
-        theme_menu = view_menu.addMenu("&Theme")
         
-        self.theme_group = QActionGroup(self)
-        
-        dark_act = QAction("&Dark Mode", self, checkable=True)
-        dark_act.triggered.connect(lambda: self.set_theme("dark"))
-        self.theme_group.addAction(dark_act)
-        theme_menu.addAction(dark_act)
-        
-        light_act = QAction("&Light Mode", self, checkable=True)
-        light_act.triggered.connect(lambda: self.set_theme("light"))
-        self.theme_group.addAction(light_act)
-        theme_menu.addAction(light_act)
-        
-        if self.app_config.get("theme", "dark") == "light":
-            light_act.setChecked(True)
-        else:
-            dark_act.setChecked(True)
-
-        view_menu.addSeparator()
         log_act = QAction("Show &Log", self)
         log_act.setShortcut("L")
         log_act.triggered.connect(self.log_win.toggle)
@@ -962,19 +1077,6 @@ class InnerPulseQt(QMainWindow):
             except Exception as e:
                 self.log_win.log(f"[ERROR] Failed to import: {str(e)}")
 
-    def set_theme(self, theme):
-        self.app_config["theme"] = theme
-        self.apply_theme()
-        self.save_config()
-
-    def apply_theme(self):
-        is_dark = self.app_config.get("theme", "dark") == "dark"
-        self.setStyleSheet(MAIN_STYLE if is_dark else LIGHT_STYLE)
-        if hasattr(self, 'canvas'):
-            self.canvas.set_theme(is_dark)
-        self.log_win.setStyleSheet("background: #111; color: #0f0; font-family: 'Courier New', monospace;" if is_dark else 
-                                  "background: #fff; color: #000; font-family: 'Courier New', monospace; border: 1px solid #ccc;")
-
     def toggle_mode(self):
         self.vis_mode = "LED" if self.vis_mode == "BAR" else "BAR"
         self.btn_mode.setText(f"Mode: {self.vis_mode}")
@@ -986,6 +1088,8 @@ class InnerPulseQt(QMainWindow):
         self.eng.set_tone_mode(new_mode)
         btn_text = "♪ Wood" if new_mode == "woody" else "♪ Elec"
         self.btn_tone.setText(btn_text)
+        self.app_config["tone"] = new_mode
+        self.save_config()
         self.log_win.log(f"[TONE] Switched to {new_mode.upper()} mode")
 
     def open_mute_options(self):
