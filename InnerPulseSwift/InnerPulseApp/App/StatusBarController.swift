@@ -448,11 +448,6 @@ private struct FloatingPendulumView: View {
                     Text("Beat \(viewModel.currentBeat)")
                         .font(.system(size: 12, weight: .bold, design: .rounded))
                         .foregroundStyle(.white.opacity(0.85))
-                    Text("•")
-                        .foregroundStyle(.white.opacity(0.28))
-                    Text("\(viewModel.bpm) BPM / \(viewModel.beatsPerBar)/4")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.72))
                     Spacer()
                     HStack(spacing: 4) {
                         subtleStateText("RND ON", visible: viewModel.randomTraining)

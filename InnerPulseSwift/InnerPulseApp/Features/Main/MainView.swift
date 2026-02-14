@@ -5,10 +5,10 @@ struct MainView: View {
     @ObservedObject var viewModel: MainViewModel
     let showVisualizer: Bool
     let onOpenSetlist: (() -> Void)?
+    let onClose: (() -> Void)?
     let onQuit: (() -> Void)?
     @State private var activeSheet: ActiveSheet?
     @State private var keyMonitor: Any?
-    @State private var showDeleteConfirmation = false
 
     private enum ActiveSheet: Int, Identifiable {
         case muteOptions
@@ -356,7 +356,7 @@ struct MainView: View {
                     optionAction("RANDOM", icon: "shuffle") { activeSheet = .randomOptions }
                     optionAction("SETLIST", icon: "music.note.list") { onOpenSetlist?() }
                     optionAction("LOG", icon: "doc.text.magnifyingglass") { activeSheet = .log }
-                    optionAction("DELETE", icon: "trash") { showDeleteConfirmation = true }
+                    optionAction("CLOSE", icon: "xmark.circle") { onClose?() }
                     optionAction("QUIT", icon: "power") { onQuit?() }
                 }
             } else {
@@ -367,15 +367,6 @@ struct MainView: View {
                         .keyboardShortcut("l", modifiers: [])
                 }
             }
-        }
-        .alert("Delete Data?", isPresented: $showDeleteConfirmation) {
-            Button("Delete", role: .destructive) {
-                viewModel.resetAppData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text(
-                "Are you sure you want to delete all settings and setlists? This cannot be undone.")
         }
     }
 
