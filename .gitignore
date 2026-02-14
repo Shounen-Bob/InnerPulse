@@ -19,3 +19,4 @@ InnerPulseSwift/*.xcodeproj/project.xcworkspace/xcuserdata/
 InnerPulseSwift/*.xcworkspace/xcuserdata/
 InnerPulseSwift/DerivedData/
 *.xcuserstate
+.cache/

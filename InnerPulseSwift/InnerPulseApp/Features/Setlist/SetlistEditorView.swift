@@ -8,43 +8,68 @@ struct SetlistEditorView: View {
     @State private var searchText = ""
     @State private var importError: String?
 
-    private var visibleIndices: [Int] {
-        if searchText.isEmpty {
-            return Array(setlist.indices)
+    private var visibleSongIDs: [UUID] {
+        let key = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else {
+            return setlist.map { $0.id }
         }
-        let key = searchText.lowercased()
-        return setlist.indices.filter { idx in
-            setlist[idx].name.lowercased().contains(key)
-        }
+        return setlist
+            .filter { $0.name.localizedCaseInsensitiveContains(key) }
+            .map { $0.id }
     }
 
     var body: some View {
-        List {
-            ForEach(visibleIndices, id: \.self) { idx in
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("Song Name", text: $setlist[idx].name, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                        .lineLimit(1...2)
+        VStack(spacing: 12) {
+            TextField("Search songs", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal, 2)
 
-                    HStack(spacing: 10) {
-                        Stepper("BPM \(setlist[idx].bpm)", value: $setlist[idx].bpm, in: 40...300)
-                        Stepper("Beat \(setlist[idx].bpb)", value: $setlist[idx].bpb, in: 1...8)
-                        Spacer(minLength: 4)
-                        Button(role: .destructive) {
-                            setlist.remove(at: idx)
-                        } label: {
-                            Image(systemName: "trash")
-                                .font(.system(size: 12, weight: .bold))
-                                .frame(width: 26, height: 26)
+            ScrollView {
+                LazyVStack(spacing: 12) {
+                    ForEach(visibleSongIDs, id: \.self) { id in
+                        if let songBinding = binding(for: id) {
+                            let song = songBinding.wrappedValue
+                            VStack(alignment: .leading, spacing: 8) {
+                                TextField("Song Name", text: songBinding.name, axis: .vertical)
+                                    .textFieldStyle(.roundedBorder)
+                                    .lineLimit(1...2)
+
+                                HStack(spacing: 10) {
+                                    HStack(spacing: 4) {
+                                        Text("BPM")
+                                        TextField("BPM", value: songBinding.bpm, format: .number)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: 50)
+                                            .multilineTextAlignment(.trailing)
+                                        Stepper("", value: songBinding.bpm, in: 40...300)
+                                            .labelsHidden()
+                                    }
+                                    Stepper("Beat \(song.bpb)", value: songBinding.bpb, in: 1...8)
+                                    Spacer(minLength: 4)
+                                    Button(role: .destructive) {
+                                        removeSong(withId: id)
+                                    } label: {
+                                        Image(systemName: "trash")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .frame(width: 26, height: 26)
+                                    }
+                                    .buttonStyle(.borderless)
+                                }
+                            }
+                            .padding(.vertical, 6)
+                            .padding(.horizontal, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.black.opacity(0.04))
+                            )
                         }
-                        .buttonStyle(.borderless)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.horizontal, 2)
+                .padding(.bottom, 4)
             }
         }
-        .listStyle(.inset)
-        .searchable(text: $searchText, prompt: "Search songs")
+        .padding(.vertical, 6)
         .alert("JSON Load Failed", isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
@@ -65,6 +90,16 @@ struct SetlistEditorView: View {
             }
         }
         .navigationTitle("Setlist")
+    }
+
+    private func binding(for id: UUID) -> Binding<Song>? {
+        guard let idx = setlist.firstIndex(where: { $0.id == id }) else { return nil }
+        return $setlist[idx]
+    }
+
+    private func removeSong(withId id: UUID) {
+        guard let idx = setlist.firstIndex(where: { $0.id == id }) else { return }
+        setlist.remove(at: idx)
     }
 
     private func loadFromJSON() {

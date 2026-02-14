@@ -4,9 +4,17 @@ import SwiftUI
 struct MainView: View {
     @ObservedObject var viewModel: MainViewModel
     let showVisualizer: Bool
-    @State private var showMuteOptions = false
-    @State private var showRandomOptions = false
+    let onOpenSetlist: (() -> Void)?
+    @State private var activeSheet: ActiveSheet?
     @State private var keyMonitor: Any?
+
+    private enum ActiveSheet: Int, Identifiable {
+        case muteOptions
+        case randomOptions
+        case log
+
+        var id: Int { rawValue }
+    }
 
     private enum Palette {
         static let bgTop = Color(red: 0.09, green: 0.10, blue: 0.14)
@@ -60,75 +68,65 @@ struct MainView: View {
             )
             .padding(isOptionsMode ? 0 : 0)
         }
-        .sheet(isPresented: $viewModel.isSetlistPresented) {
-            NavigationStack {
-                SetlistEditorView(setlist: $viewModel.setlist)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { viewModel.isSetlistPresented = false }
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .muteOptions:
+                NavigationStack {
+                    Form {
+                        Section("Sounds Allowed During Mute Bars") {
+                            Toggle("Accent", isOn: $viewModel.muteOptAcc)
+                            Toggle("Backbeat", isOn: $viewModel.muteOptBackbeat)
+                            Toggle("Quarter (4th)", isOn: $viewModel.muteOpt4th)
+                            Toggle("Eighth (8th)", isOn: $viewModel.muteOpt8th)
+                            Toggle("Sixteenth (16th)", isOn: $viewModel.muteOpt16th)
+                            Toggle("Triplet", isOn: $viewModel.muteOptTrip)
                         }
                     }
-            }
-            .frame(minWidth: 420, minHeight: 420)
-        }
-        .sheet(isPresented: $showMuteOptions) {
-            NavigationStack {
-                Form {
-                    Section("Sounds Allowed During Mute Bars") {
-                        Toggle("Accent", isOn: $viewModel.muteOptAcc)
-                        Toggle("Backbeat", isOn: $viewModel.muteOptBackbeat)
-                        Toggle("Quarter (4th)", isOn: $viewModel.muteOpt4th)
-                        Toggle("Eighth (8th)", isOn: $viewModel.muteOpt8th)
-                        Toggle("Sixteenth (16th)", isOn: $viewModel.muteOpt16th)
-                        Toggle("Triplet", isOn: $viewModel.muteOptTrip)
-                    }
-                }
-                .navigationTitle("Mute Rules")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { showMuteOptions = false }
-                    }
-                }
-            }
-            .frame(minWidth: 340, minHeight: 320)
-        }
-        .sheet(isPresented: $showRandomOptions) {
-            NavigationStack {
-                Form {
-                    Section("Normal (Play) Bars") {
-                        Text("Min/Max bars to keep metronome audible in Random mode.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Stepper("Min: \(viewModel.rndPlayMin)", value: $viewModel.rndPlayMin, in: 1...16)
-                        Stepper("Max: \(viewModel.rndPlayMax)", value: $viewModel.rndPlayMax, in: 1...16)
-                    }
-                    Section("Mute Bars") {
-                        Text("Min/Max bars to mute in Random mode.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Stepper("Min: \(viewModel.rndMuteMin)", value: $viewModel.rndMuteMin, in: 1...16)
-                        Stepper("Max: \(viewModel.rndMuteMax)", value: $viewModel.rndMuteMax, in: 1...16)
-                    }
-                }
-                .navigationTitle("Random Settings")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { showRandomOptions = false }
-                    }
-                }
-            }
-            .frame(minWidth: 340, minHeight: 300)
-        }
-        .sheet(isPresented: $viewModel.isLogPresented) {
-            NavigationStack {
-                LogView(logs: viewModel.logs)
+                    .navigationTitle("Mute Rules")
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Close") { viewModel.isLogPresented = false }
+                            Button("Close") { activeSheet = nil }
                         }
                     }
+                }
+                .frame(minWidth: 340, minHeight: 320)
+            case .randomOptions:
+                NavigationStack {
+                    Form {
+                        Section("Normal (Play) Bars") {
+                            Text("Min/Max bars to keep metronome audible in Random mode.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Stepper("Min: \(viewModel.rndPlayMin)", value: $viewModel.rndPlayMin, in: 1...16)
+                            Stepper("Max: \(viewModel.rndPlayMax)", value: $viewModel.rndPlayMax, in: 1...16)
+                        }
+                        Section("Mute Bars") {
+                            Text("Min/Max bars to mute in Random mode.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Stepper("Min: \(viewModel.rndMuteMin)", value: $viewModel.rndMuteMin, in: 1...16)
+                            Stepper("Max: \(viewModel.rndMuteMax)", value: $viewModel.rndMuteMax, in: 1...16)
+                        }
+                    }
+                    .navigationTitle("Random Settings")
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Close") { activeSheet = nil }
+                        }
+                    }
+                }
+                .frame(minWidth: 340, minHeight: 300)
+            case .log:
+                NavigationStack {
+                    LogView(logs: viewModel.logs)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close") { activeSheet = nil }
+                            }
+                        }
+                }
+                .frame(minWidth: 520, maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
             }
-            .frame(minWidth: 520, maxWidth: .infinity, minHeight: 360, maxHeight: .infinity)
         }
         .onAppear {
             installHotkeys()
@@ -236,7 +234,7 @@ struct MainView: View {
                 }
 
                 if !isOptionsMode {
-                    miniAction("RANDOM OPT") { showRandomOptions = true }
+                    miniAction("RANDOM OPT") { activeSheet = .randomOptions }
                 }
             }
         }
@@ -279,16 +277,16 @@ struct MainView: View {
             if isOptionsMode {
                 let cols = Array(repeating: GridItem(.flexible(), spacing: 6), count: 3)
                 LazyVGrid(columns: cols, spacing: 6) {
-                    optionAction("MUTE RULES", icon: "speaker.slash") { showMuteOptions = true }
-                    optionAction("RANDOM", icon: "shuffle") { showRandomOptions = true }
-                    optionAction("SETLIST", icon: "music.note.list") { viewModel.isSetlistPresented = true }
-                    optionAction("LOG", icon: "doc.text.magnifyingglass") { viewModel.toggleLogWindow() }
+                    optionAction("MUTE RULES", icon: "speaker.slash") { activeSheet = .muteOptions }
+                    optionAction("RANDOM", icon: "shuffle") { activeSheet = .randomOptions }
+                    optionAction("SETLIST", icon: "music.note.list") { onOpenSetlist?() }
+                    optionAction("LOG", icon: "doc.text.magnifyingglass") { activeSheet = .log }
                 }
             } else {
                 HStack(spacing: 6) {
-                    miniAction("MUTE RULES") { showMuteOptions = true }
-                    miniAction("SETLIST") { viewModel.isSetlistPresented = true }
-                    miniAction("LOG") { viewModel.toggleLogWindow() }
+                    miniAction("MUTE RULES") { activeSheet = .muteOptions }
+                    miniAction("SETLIST") { onOpenSetlist?() }
+                    miniAction("LOG") { activeSheet = .log }
                         .keyboardShortcut("l", modifiers: [])
                 }
             }
@@ -417,7 +415,7 @@ struct MainView: View {
                 return event
             }
             if chars == "l" {
-                viewModel.toggleLogWindow()
+                activeSheet = .log
                 return nil
             }
             return event

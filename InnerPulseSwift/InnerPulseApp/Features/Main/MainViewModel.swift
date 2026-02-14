@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import QuartzCore
 
@@ -7,40 +8,163 @@ final class MainViewModel: ObservableObject {
         case woody
     }
 
-    @Published var bpm: Int { didSet { guard !isBootstrapping else { return }; syncTempo() } }
-    @Published var beatsPerBar: Int { didSet { guard !isBootstrapping else { return }; syncTempo() } }
-    @Published var playBars: Int { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var muteBars: Int { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var randomTraining: Bool { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var forcePlay: Bool { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var rndPlayMin: Int { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var rndPlayMax: Int { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var rndMuteMin: Int { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var rndMuteMax: Int { didSet { guard !isBootstrapping else { return }; syncTrainingOptions() } }
-    @Published var vMaster: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var vAcc: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var vBackbeat: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var v4th: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var v8th: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var v16th: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var vTrip: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var vMuteDim: Double { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var muteOptAcc: Bool { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var muteOptBackbeat: Bool { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var muteOpt4th: Bool { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var muteOpt8th: Bool { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var muteOpt16th: Bool { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var muteOptTrip: Bool { didSet { guard !isBootstrapping else { return }; syncMixOptions() } }
-    @Published var toneMode: ToneMode { didSet { guard !isBootstrapping else { return }; syncToneOptions() } }
+    @Published var bpm: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTempo()
+        }
+    }
+    @Published var beatsPerBar: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTempo()
+        }
+    }
+    @Published var playBars: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var muteBars: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var randomTraining: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var forcePlay: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var rndPlayMin: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var rndPlayMax: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var rndMuteMin: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var rndMuteMax: Int {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncTrainingOptions()
+        }
+    }
+    @Published var vMaster: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var vAcc: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var vBackbeat: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var v4th: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var v8th: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var v16th: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var vTrip: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var vMuteDim: Double {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var muteOptAcc: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var muteOptBackbeat: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var muteOpt4th: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var muteOpt8th: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var muteOpt16th: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var muteOptTrip: Bool {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncMixOptions()
+        }
+    }
+    @Published var toneMode: ToneMode {
+        didSet {
+            guard !isBootstrapping else { return }
+            syncToneOptions()
+        }
+    }
     @Published var isPlaying = false
     @Published var currentBeat = 1
     @Published var currentBar = 1
     @Published var isMute = false
     @Published var visualPhase: Double = -1.0
-    @Published var isLogPresented = false
     @Published var logs: [String] = []
-    @Published var isSetlistPresented = false
-    @Published var setlist: [Song] { didSet { guard !isBootstrapping else { return }; persistSetlistChanges() } }
+    @Published var setlist: [Song]  // debounced save
     @Published var setlistIndex: Int
 
     private let appState: AppState
@@ -50,6 +174,7 @@ final class MainViewModel: ObservableObject {
     private var phaseAnchorBeat: Double = 0.0
     private var phaseAnchorTime: TimeInterval?
     private var lastBeatTimestamp: TimeInterval?
+    private var cancellables = Set<AnyCancellable>()
 
     init(appState: AppState) {
         self.appState = appState
@@ -81,6 +206,8 @@ final class MainViewModel: ObservableObject {
         self.setlist = appState.setlist
         self.setlistIndex = appState.setlistIndex
 
+        setupSubscriptions()
+
         engine.onBeat = { [weak self] state in
             guard let self else { return }
             self.currentBeat = state.beat
@@ -89,6 +216,16 @@ final class MainViewModel: ObservableObject {
             self.appendTimingLog(state: state)
         }
         isBootstrapping = false
+    }
+
+    private func setupSubscriptions() {
+        $setlist
+            .dropFirst()  // Skip initial load
+            .debounce(for: 0.5, scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.persistSetlistChanges()
+            }
+            .store(in: &cancellables)
     }
 
     func togglePlayback() {
@@ -133,10 +270,6 @@ final class MainViewModel: ObservableObject {
     private func syncToneOptions() {
         applyToEngine()
         saveConfig()
-    }
-
-    func toggleLogWindow() {
-        isLogPresented.toggle()
     }
 
     func previousSong() {
@@ -272,7 +405,10 @@ final class MainViewModel: ObservableObject {
         let angle = 30.0 * cos(phase * .pi)
         let visErr = 30.0 - abs(angle)
         let mode = state.isMute ? "MUTE" : "PLAY"
-        log(String(format: "[%@] Bar:%d Beat:%d (Df:%@) | Vis:%.4f°", mode, state.bar, state.beat, dfText, visErr))
+        log(
+            String(
+                format: "[%@] Bar:%d Beat:%d (Df:%@) | Vis:%.4f°", mode, state.bar, state.beat,
+                dfText, visErr))
     }
 
     private func log(_ message: String) {

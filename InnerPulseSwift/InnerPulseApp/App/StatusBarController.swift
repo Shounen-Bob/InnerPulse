@@ -6,6 +6,7 @@ final class StatusBarController: NSObject {
     private weak var viewModel: MainViewModel?
     private var floatingPanel: NSPanel?
     private var optionsWindow: NSWindow?
+    private var setlistWindow: NSWindow?
     private var keyMonitor: Any?
     private var isConfigured = false
 
@@ -71,6 +72,10 @@ final class StatusBarController: NSObject {
         optItem.target = self
         menu.addItem(optItem)
 
+        let setlistItem = NSMenuItem(title: "Setlist", action: #selector(menuOpenSetlist), keyEquivalent: "s")
+        setlistItem.target = self
+        menu.addItem(setlistItem)
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "Quit InnerPulse", action: #selector(menuQuit), keyEquivalent: "q")
@@ -87,6 +92,7 @@ final class StatusBarController: NSObject {
     @objc private func menuTogglePlayback() { viewModel?.togglePlayback() }
 
     @objc private func menuOpenOptions() { openOptionsWindow() }
+    @objc private func menuOpenSetlist() { openSetlistWindow() }
 
     @objc private func menuQuit() {
         NSApp.terminate(nil)
@@ -162,11 +168,43 @@ final class StatusBarController: NSObject {
         win.isOpaque = false
         win.backgroundColor = NSColor.black.withAlphaComponent(0.18)
         win.center()
-        win.contentView = NSHostingView(rootView: MainView(viewModel: vm, showVisualizer: false))
+        win.contentView = NSHostingView(rootView: MainView(
+            viewModel: vm,
+            showVisualizer: false,
+            onOpenSetlist: { [weak self] in self?.openSetlistWindow() }
+        ))
         win.isReleasedWhenClosed = false
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
         optionsWindow = win
+    }
+
+    private func openSetlistWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+
+        if let win = setlistWindow {
+            win.makeKeyAndOrderFront(nil)
+            return
+        }
+        guard let vm = viewModel else { return }
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 520),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        win.title = "Setlist"
+        win.center()
+        win.contentView = NSHostingView(rootView: NavigationStack {
+            SetlistEditorView(setlist: Binding(
+                get: { vm.setlist },
+                set: { vm.setlist = $0 }
+            ))
+        })
+        win.isReleasedWhenClosed = false
+        win.delegate = self
+        win.makeKeyAndOrderFront(nil)
+        setlistWindow = win
     }
 }
 
@@ -174,6 +212,9 @@ extension StatusBarController: NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         if let win = notification.object as? NSWindow, win == optionsWindow {
             optionsWindow = nil
+        }
+        if let win = notification.object as? NSWindow, win == setlistWindow {
+            setlistWindow = nil
         }
     }
 }
